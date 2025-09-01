@@ -1,0 +1,16 @@
+/* Merchant Black Font Face Declaration */
+@font-face {
+  font-family: 'Merchant Black';
+  src: url('./Merchant-Black.woff') format('woff');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap; /* Improves loading performance */
+}
+
+/* Merchant Black utility class */
+.merchant-black {
+  font-family: 'Merchant Black', 'Merriweather', serif;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
