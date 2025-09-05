@@ -183,23 +183,33 @@ def update_heatmap_bucket_counts(
     # For demo, map keys to assessment filters
     # This is simplified - in production you'd have proper sector/region mapping
     if dimension == "sector":
-        # Filter by stock symbols or message content for sector mapping
+        # Filter by known tickers/keywords appearing in the tip message text
+        # Using Tip.message avoids JSON containment dialect issues on SQLite
         if key.lower() in ["technology", "tech"]:
             assessments_query = assessments_query.filter(
-                Assessment.stock_symbols.contains('"TECH"') |
-                Assessment.stock_symbols.contains('"TCS"') |
-                Assessment.stock_symbols.contains('"INFY"')
+                Tip.message.contains("TCS") |
+                Tip.message.contains("INFY") |
+                Tip.message.contains("WIPRO") |
+                Tip.message.contains("TECHM") |
+                Tip.message.contains("HCLTECH") |
+                Tip.message.contains("tech")
             )
         elif key.lower() in ["banking", "finance"]:
             assessments_query = assessments_query.filter(
-                Assessment.stock_symbols.contains('"HDFC"') |
-                Assessment.stock_symbols.contains('"ICICI"') |
-                Assessment.stock_symbols.contains('"SBI"')
+                Tip.message.contains("HDFC") |
+                Tip.message.contains("ICICI") |
+                Tip.message.contains("SBI") |
+                Tip.message.contains("KOTAK") |
+                Tip.message.contains("AXIS") |
+                Tip.message.contains("bank")
             )
         elif key.lower() in ["pharma", "pharmaceutical"]:
             assessments_query = assessments_query.filter(
-                Assessment.stock_symbols.contains('"CIPLA"') |
-                Assessment.stock_symbols.contains('"DRREDDY"')
+                Tip.message.contains("CIPLA") |
+                Tip.message.contains("DRREDDY") |
+                Tip.message.contains("SUNPHARMA") |
+                Tip.message.contains("LUPIN") |
+                Tip.message.contains("pharma")
             )
     elif dimension == "region":
         # For demo, we'll use a simple distribution
@@ -238,6 +248,9 @@ def aggregate_heatmap_data(
         from_date = date.today() - timedelta(days=30)
     if not to_date:
         to_date = date.today()
+    # Guard against invalid ranges
+    if from_date > to_date:
+        return []
     
     # Define keys for each dimension
     if dimension == "sector":
@@ -252,20 +265,26 @@ def aggregate_heatmap_data(
     current_date = from_date
     
     while current_date <= to_date:
+        # Start of this bucket
+        range_start = current_date
+        
         if period == "daily":
-            range_end = current_date
-            current_date += timedelta(days=1)
+            range_end = range_start
+            # advance to next day
+            current_date = range_end + timedelta(days=1)
         elif period == "weekly":
-            range_end = min(current_date + timedelta(days=6), to_date)
-            current_date += timedelta(days=7)
+            range_end = min(range_start + timedelta(days=6), to_date)
+            # advance to the day after this range
+            current_date = range_end + timedelta(days=1)
         elif period == "monthly":
-            # Simple monthly approximation
-            range_end = min(current_date + timedelta(days=29), to_date)
-            current_date += timedelta(days=30)
+            # Simple monthly approximation (30-day buckets)
+            range_end = min(range_start + timedelta(days=29), to_date)
+            current_date = range_end + timedelta(days=1)
         else:
             raise ValueError("Invalid period. Must be 'daily', 'weekly', or 'monthly'")
         
-        date_ranges.append((current_date - timedelta(days=1) if period != "daily" else current_date, range_end))
+        # Append the computed (start, end) inclusive range
+        date_ranges.append((range_start, range_end))
     
     # Update buckets for each key and date range
     result = []

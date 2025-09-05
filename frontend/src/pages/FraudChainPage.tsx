@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { fraudChainApi, FraudChain, FraudChainListItem, FraudChainNode, FraudChainEdge } from '../services/api'
-import FraudChainVisualization from '../components/FraudChainVisualization'
+import FraudChainGraph from '../components/FraudChainGraph'
 import FraudChainDetailsModal from '../components/FraudChainDetailsModal'
 
 const FraudChainPage: React.FC = () => {
@@ -14,6 +14,20 @@ const FraudChainPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
   const [autoLinking, setAutoLinking] = useState(false)
+  const [layoutAlgo, setLayoutAlgo] = useState<'fcose' | 'dagre'>('fcose')
+
+  const getErrorMessage = (err: any, fallback: string) => {
+    try {
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail || err?.response?.data?.message
+      const text = detail || err?.message
+      if (status && text) return `${fallback} (HTTP ${status}): ${text}`
+      if (text) return `${fallback}: ${text}`
+      return fallback
+    } catch {
+      return fallback
+    }
+  }
 
   useEffect(() => {
     loadChains()
@@ -29,7 +43,7 @@ const FraudChainPage: React.FC = () => {
       })
       setChains(response.data)
     } catch (err) {
-      setError('Failed to load fraud chains')
+      setError(getErrorMessage(err, 'Failed to load fraud chains'))
       console.error('Error loading chains:', err)
     } finally {
       setLoading(false)
@@ -43,7 +57,7 @@ const FraudChainPage: React.FC = () => {
       const response = await fraudChainApi.getChain(chainId)
       setSelectedChain(response.data)
     } catch (err) {
-      setError('Failed to load chain details')
+      setError(getErrorMessage(err, 'Failed to load chain details'))
       console.error('Error loading chain details:', err)
     } finally {
       setLoadingChain(false)
@@ -146,14 +160,24 @@ const FraudChainPage: React.FC = () => {
 
         {error && (
           <div className="mb-6 bg-danger-900 border border-danger-700 rounded-md p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-danger-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-danger-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-danger-200">{error}</p>
+                </div>
               </div>
-              <div className="ml-3">
-                <p className="text-sm text-danger-200">{error}</p>
+              <div className="flex-shrink-0">
+                <button
+                  onClick={loadChains}
+                  className="px-3 py-1 text-sm bg-danger-800 text-danger-100 rounded-md hover:bg-danger-700 border border-danger-600"
+                >
+                  Retry
+                </button>
               </div>
             </div>
           </div>
@@ -185,6 +209,18 @@ const FraudChainPage: React.FC = () => {
                   <option value="investigating">Investigating</option>
                   <option value="closed">Closed</option>
                 </select>
+
+                <div className="mt-3">
+                  <label className="block text-xs text-dark-secondary mb-1">Layout</label>
+                  <select
+                    value={layoutAlgo}
+                    onChange={(e) => setLayoutAlgo(e.target.value as 'fcose' | 'dagre')}
+                    className="w-full px-3 py-2 bg-dark-800 border border-dark-primary rounded-md text-sm text-dark-primary focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="fcose">Force-directed (fCoSE)</option>
+                    <option value="dagre">Hierarchical (Dagre)</option>
+                  </select>
+                </div>
               </div>
 
               <div className="max-h-96 overflow-y-auto">
@@ -284,11 +320,12 @@ const FraudChainPage: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <FraudChainVisualization
+                      <FraudChainGraph
                         chain={selectedChain}
                         onNodeClick={handleNodeClick}
                         onEdgeClick={handleEdgeClick}
-                        className="h-96"
+                        className="min-h-[600px]"
+                        layout={layoutAlgo}
                       />
                     )}
                   </div>

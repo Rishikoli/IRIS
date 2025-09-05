@@ -28,7 +28,7 @@ export class WebSocketService {
   private eventHandlers: WebSocketEventHandler[] = []
   private isConnecting = false
 
-  constructor(private url: string = 'ws://localhost:8000/ws/alerts') {}
+  constructor(private url: string = 'ws://localhost:8001/ws/alerts') {}
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {

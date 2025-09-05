@@ -26,6 +26,8 @@ MANIFEST
 *.manifest
 *.spec
 .kiro
+# Explicitly ignore kiro specs path
+.kiro/specs/iris-regtech-platform/
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -337,6 +339,9 @@ test_demo.db
 
 # Documentation build
 docs/build/
+
+# Project documentation (ignore entire docs directory)
+docs/
 
 # Certificates and keys
 *.pem

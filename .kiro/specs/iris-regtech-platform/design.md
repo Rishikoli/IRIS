@@ -37,7 +37,7 @@ graph TB
     
     subgraph "External Services"
         N[Gemini 2.0 Flash API]
-        O[SEBI Directory API]
+        O[SEBI Directory ]
         P[OCR Service]
         Q[FMP API]
         R[Google Trends API]

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import HeatmapVisualization from './HeatmapVisualization'
+import IndiaHeatmap from './IndiaHeatmap'
 import ForecastVisualization from './ForecastVisualization'
 import ForecastSidebar from './ForecastSidebar'
 import DashboardFilters from './DashboardFilters'
 import TrendIndicators from './TrendIndicators'
 import { heatmapApi, forecastApi, FraudHeatmapResponse, ForecastResponse, ForecastItem } from '../services/api'
+import customIndiaMap from '../maps/customIndiaMap'
 
 interface UnifiedDashboardProps {
   onHeatmapCellClick?: (key: string) => void
@@ -241,10 +242,11 @@ const UnifiedDashboard: React.FC<UnifiedDashboardProps> = ({ onHeatmapCellClick 
               )}
 
               {heatmapData && !heatmapError && (
-                <HeatmapVisualization
+                <IndiaHeatmap
                   data={heatmapData.data}
                   dimension={dimension}
                   onCellClick={onHeatmapCellClick}
+                  customSvg={customIndiaMap}
                 />
               )}
             </div>

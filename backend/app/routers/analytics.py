@@ -6,9 +6,19 @@ Advanced analytics and reporting endpoints
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, Any, Optional
+from datetime import datetime
 import logging
 
 from app.services.analytics_service import analytics_service
+from app.schemas.analytics import (
+    PlatformSummaryResponse,
+    FraudTrendsResponse,
+    SectorAnalysisResponse,
+    RegionalAnalysisResponse,
+    AdvisorVerificationResponse,
+    DocumentAuthenticityResponse,
+    PlatformUsageResponse,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +26,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
-@router.get("/summary")
-async def get_analytics_summary() -> Dict[str, Any]:
+@router.get("/summary", response_model=PlatformSummaryResponse)
+async def get_analytics_summary(
+    insights: bool = Query(False, description="Include AI-generated insights (Gemini)")
+) -> Dict[str, Any]:
     """
     Get comprehensive platform-wide analytics summary
     
@@ -27,25 +39,27 @@ async def get_analytics_summary() -> Dict[str, Any]:
     """
     try:
         logger.info("Fetching analytics summary")
-        summary = await analytics_service.get_platform_summary()
+        summary = await analytics_service.get_platform_summary(insights=insights)
         
         if "error" in summary:
             raise HTTPException(status_code=500, detail=summary["error"])
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": summary,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching analytics summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/trends/fraud")
+@router.get("/trends/fraud", response_model=FraudTrendsResponse)
 async def get_fraud_trends(
     days: int = Query(30, ge=1, le=365, description="Number of days to analyze"),
-    granularity: str = Query("daily", regex="^(hourly|daily|weekly)$", description="Data granularity")
+    granularity: str = Query("daily", regex="^(hourly|daily|weekly)$", description="Data granularity"),
+    insights: bool = Query(False, description="Include AI-generated insights (Gemini)")
 ) -> Dict[str, Any]:
     """
     Get fraud trend analysis with time-series data
@@ -59,23 +73,26 @@ async def get_fraud_trends(
     """
     try:
         logger.info(f"Fetching fraud trends for {days} days with {granularity} granularity")
-        trends = await analytics_service.get_fraud_trends(days=days, granularity=granularity)
+        trends = await analytics_service.get_fraud_trends(days=days, granularity=granularity, insights=insights)
         
         if "error" in trends:
             raise HTTPException(status_code=500, detail=trends["error"])
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": trends,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching fraud trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/analysis/sectors")
-async def get_sector_analysis() -> Dict[str, Any]:
+@router.get("/analysis/sectors", response_model=SectorAnalysisResponse)
+async def get_sector_analysis(
+    insights: bool = Query(False, description="Include AI-generated insights and FMP context")
+) -> Dict[str, Any]:
     """
     Get sector-wise fraud pattern analysis
     
@@ -84,23 +101,26 @@ async def get_sector_analysis() -> Dict[str, Any]:
     """
     try:
         logger.info("Fetching sector-wise fraud analysis")
-        analysis = await analytics_service.get_sector_analysis()
+        analysis = await analytics_service.get_sector_analysis(insights=insights)
         
         if "error" in analysis:
             raise HTTPException(status_code=500, detail=analysis["error"])
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": analysis,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching sector analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/analysis/regions")
-async def get_regional_analysis() -> Dict[str, Any]:
+@router.get("/analysis/regions", response_model=RegionalAnalysisResponse)
+async def get_regional_analysis(
+    insights: bool = Query(False, description="Include AI-generated insights (Gemini)")
+) -> Dict[str, Any]:
     """
     Get region-wise fraud pattern analysis
     
@@ -109,22 +129,23 @@ async def get_regional_analysis() -> Dict[str, Any]:
     """
     try:
         logger.info("Fetching regional fraud analysis")
-        analysis = await analytics_service.get_regional_analysis()
+        analysis = await analytics_service.get_regional_analysis(insights=insights)
         
         if "error" in analysis:
             raise HTTPException(status_code=500, detail=analysis["error"])
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": analysis,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching regional analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/verification/advisors")
+@router.get("/verification/advisors", response_model=AdvisorVerificationResponse)
 async def get_advisor_verification_stats() -> Dict[str, Any]:
     """
     Get advisor verification success rate tracking
@@ -162,17 +183,18 @@ async def get_advisor_verification_stats() -> Dict[str, Any]:
             }
         }
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": stats,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching advisor verification stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/documents/authenticity")
+@router.get("/documents/authenticity", response_model=DocumentAuthenticityResponse)
 async def get_document_authenticity_trends() -> Dict[str, Any]:
     """
     Get document authenticity trend monitoring
@@ -228,17 +250,18 @@ async def get_document_authenticity_trends() -> Dict[str, Any]:
             }
         }
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": trends,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
         logger.error(f"Error fetching document authenticity trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/usage/platform")
+@router.get("/usage/platform", response_model=PlatformUsageResponse)
 async def get_platform_usage_analytics() -> Dict[str, Any]:
     """
     Get user activity and platform usage analytics
@@ -285,10 +308,11 @@ async def get_platform_usage_analytics() -> Dict[str, Any]:
             }
         }
         
+        now = datetime.utcnow().isoformat() + "Z"
         return {
             "status": "success",
             "data": usage,
-            "timestamp": "2024-12-19T10:30:00Z"
+            "timestamp": now,
         }
     
     except Exception as e:
@@ -315,19 +339,21 @@ async def export_analytics_summary(
         summary = await analytics_service.get_platform_summary()
         
         if format == "json":
+            now = datetime.utcnow().isoformat() + "Z"
             return {
                 "status": "success",
                 "format": "json",
                 "data": summary,
-                "export_timestamp": "2024-12-19T10:30:00Z"
+                "export_timestamp": now,
             }
         else:  # CSV format
+            now = datetime.utcnow().isoformat() + "Z"
             return {
                 "status": "success",
                 "format": "csv",
                 "download_url": "/api/analytics/downloads/summary.csv",
                 "message": "CSV export prepared. Use the download URL to retrieve the file.",
-                "export_timestamp": "2024-12-19T10:30:00Z"
+                "export_timestamp": now,
             }
     
     except Exception as e:

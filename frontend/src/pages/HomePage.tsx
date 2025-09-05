@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Shield, FileCheck, Users, BarChart3, TrendingUp, Eye, Network, AlertTriangle, Zap, Activity } from 'lucide-react'
+import { Shield, FileCheck, Users, BarChart3, TrendingUp, Network, AlertTriangle, Zap, Activity } from 'lucide-react'
 import Plasma from '../components/Plasma'
 import { whaleLogo } from '../assets'
 import '../assets/fonts/merchant-black.css'
@@ -266,26 +266,6 @@ const HomePage = () => {
             <Activity className="h-4 w-4 mr-2" />
             <span className="text-sm">Live Model</span>
           </div>
-        </Link>
-
-        {/* Human Review */}
-        <Link
-          to="/review"
-          className="md:col-span-2 lg:col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 group border border-gray-200 dark:border-gray-700"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-3 bg-yellow-100 dark:bg-yellow-900/30 rounded-xl">
-              <Eye className="h-6 w-6 text-yellow-600 dark:text-yellow-400" />
-            </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold text-gray-900 dark:text-white">12</div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">Pending</div>
-            </div>
-          </div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Human Review Queue</h3>
-          <p className="text-gray-600 dark:text-gray-300 text-sm">
-            Manual oversight and decision validation
-          </p>
         </Link>
 
       </div>

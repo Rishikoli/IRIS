@@ -6,7 +6,7 @@ import time
 import os
 from collections import defaultdict
 from app.database import engine, Base
-from app.routers import tips, assessments, pdf_checks, advisors, heatmap, multi_source_data, forecast, fraud_chains, reviews, websockets, data_status, search
+from app.routers import tips, assessments, pdf_checks, advisors, heatmap, multi_source_data, forecast, fraud_chains, reviews, websockets, data_status, search, relations, cases
 from app.exceptions import (
     IRISException,
     validation_error_handler,
@@ -104,12 +104,14 @@ if ENVIRONMENT == "development":
         "http://localhost:5173",  # Vite dev server
         "http://127.0.0.1:5173",
         "http://localhost:3001",  # Alternative React port
-        "http://127.0.0.1:3001"
+        "http://127.0.0.1:3001",
+        "http://localhost:3002",  # Vite alt port in use
+        "http://127.0.0.1:3002",
     ])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins if ENVIRONMENT != "development" else ["*"],  # Allow all only in dev
+    allow_origins=cors_origins,  # Explicit origins; avoid '*' when allow_credentials=True
     allow_credentials=True,
     allow_methods=SecurityConfig.ALLOWED_METHODS,
     allow_headers=SecurityConfig.ALLOWED_HEADERS,
@@ -131,7 +133,9 @@ app.include_router(heatmap.router, prefix="/api", tags=["heatmap"])
 app.include_router(multi_source_data.router, prefix="/api", tags=["multi_source_data"])
 app.include_router(forecast.router, tags=["forecast"])
 app.include_router(fraud_chains.router, prefix="/api", tags=["fraud_chains"])
+app.include_router(relations.router, prefix="/api", tags=["relations"])
 app.include_router(reviews.router, prefix="/api", tags=["reviews"])
+app.include_router(cases.router, prefix="/api", tags=["cases"])
 app.include_router(websockets.router, tags=["websockets"])
 app.include_router(data_status.router, tags=["data_status"])
 app.include_router(search.router, prefix="/api", tags=["search"])

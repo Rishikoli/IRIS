@@ -1,6 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react'
-import * as d3 from 'd3'
+  import React, { useEffect, useRef, useState } from 'react'
+
+import cytoscape, { Core, ElementDefinition } from 'cytoscape'
+import fcose from 'cytoscape-fcose'
+import dagre from 'cytoscape-dagre'
 import { FraudChain, FraudChainNode, FraudChainEdge } from '../services/api'
+
+// Register layouts
+cytoscape.use(fcose as any)
+cytoscape.use(dagre as any)
 
 interface FraudChainVisualizationProps {
   chain: FraudChain
@@ -9,17 +16,7 @@ interface FraudChainVisualizationProps {
   className?: string
 }
 
-interface D3Node extends FraudChainNode {
-  x?: number
-  y?: number
-  fx?: number | null
-  fy?: number | null
-}
-
-interface D3Edge extends FraudChainEdge {
-  source: D3Node
-  target: D3Node
-}
+type LayoutMode = 'fcose' | 'hierarchical'
 
 const FraudChainVisualization: React.FC<FraudChainVisualizationProps> = ({
   chain,
@@ -27,287 +24,205 @@ const FraudChainVisualization: React.FC<FraudChainVisualizationProps> = ({
   onEdgeClick,
   className = ''
 }) => {
-  const svgRef = useRef<SVGSVGElement>(null)
-  const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
-  const [zoomLevel, setZoomLevel] = useState(1)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const cyRef = useRef<Core | null>(null)
+  const [zoomLevel, setZoomLevel] = useState(100)
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('fcose')
 
+  // Initialize Cytoscape once
   useEffect(() => {
-    if (!svgRef.current || !chain.nodes.length) return
+    if (!containerRef.current) return
+    const cy = cytoscape({
+      container: containerRef.current,
+      style: [
+        // Nodes base
+        {
+          selector: 'node',
+          style: {
+            'background-color': '#6b7280',
+            'label': 'data(label)',
+            'color': '#e5e7eb',
+            'font-size': '10px',
+            'text-wrap': 'wrap',
+            'text-max-width': '100px',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
+            'text-margin-y': 6,
+            'border-width': 2,
+            'border-color': '#e5e7eb',
+            'width': 40,
+            'height': 40,
+          }
+        },
+        // Node type colors and sizes
+        { selector: 'node.tip', style: { 'background-color': '#000000', 'width': 50, 'height': 50 } },
+        { selector: 'node.assessment', style: { 'background-color': '#ef4444', 'width': 56, 'height': 56 } },
+        { selector: 'node.document', style: { 'background-color': '#10b981' } },
+        { selector: 'node.stock', style: { 'background-color': '#f59e0b' } },
+        { selector: 'node.complaint', style: { 'background-color': '#8b5cf6' } },
+        { selector: 'node.advisor', style: { 'background-color': '#06b6d4' } },
+        // Selected node
+        { selector: 'node:selected', style: { 'border-color': '#ff6b35', 'border-width': 3 } },
 
-    // Clear previous visualization
-    d3.select(svgRef.current).selectAll('*').remove()
+        // Edges
+        {
+          selector: 'edge',
+          style: {
+            'line-color': '#6b7280',
+            'width': 2,
+            'opacity': 0.85,
+            'curve-style': 'bezier',
+            'target-arrow-shape': 'triangle',
+            'target-arrow-color': '#6b7280',
+            'label': 'data(relLabel)',
+            'font-size': '9px',
+            'color': '#d1d5db',
+            'text-background-color': 'rgba(17,24,39,0.9)',
+            'text-background-opacity': 1,
+            'text-background-padding': 2,
+            'text-border-color': 'rgba(17,24,39,0.9)',
+            'text-border-width': 1,
+            'text-border-opacity': 1,
+            'text-rotation': 'autorotate',
+          }
+        },
+        { selector: 'edge.leads_to', style: { 'line-color': '#3b82f6', 'target-arrow-color': '#3b82f6', 'width': 3 } },
+        { selector: 'edge.references', style: { 'line-color': '#10b981', 'target-arrow-color': '#10b981' } },
+        { selector: 'edge.mentions', style: { 'line-color': '#f59e0b', 'target-arrow-color': '#f59e0b' } },
+        { selector: 'edge.involves', style: { 'line-color': '#ef4444', 'target-arrow-color': '#ef4444' } },
+        { selector: 'edge.similar_pattern', style: { 'line-color': '#8b5cf6', 'target-arrow-color': '#8b5cf6' } },
+        { selector: 'edge.escalates_to', style: { 'line-color': '#dc2626', 'target-arrow-color': '#dc2626' } },
+        { selector: 'edge:selected', style: { 'width': 4 } },
+      ] as any,
+      wheelSensitivity: 0.2,
+      pixelRatio: 1,
+    })
 
-    const svg = d3.select(svgRef.current)
-    const width = 800
-    const height = 600
+    cy.on('select', 'node', (evt) => {
+      const n = evt.target
+      const data = n.data('_raw') as FraudChainNode
+      onNodeClick?.(data)
+    })
+    cy.on('unselect', 'node', () => {})
 
-    svg.attr('width', width).attr('height', height)
+    cy.on('select', 'edge', (evt) => {
+      const e = evt.target
+      const data = e.data('_raw') as FraudChainEdge
+      onEdgeClick?.(data)
+    })
+    cy.on('unselect', 'edge', () => {})
 
-    // Create zoom behavior
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 4])
-      .on('zoom', (event) => {
-        const { transform } = event
-        setZoomLevel(transform.k)
-        g.attr('transform', transform)
-      })
+    cy.on('zoom', () => setZoomLevel(Math.round(cy.zoom() * 100)))
 
-    svg.call(zoom)
+    cyRef.current = cy
+    return () => {
+      cy.destroy()
+      cyRef.current = null
+    }
+  }, [onNodeClick, onEdgeClick])
 
-    // Create main group for zooming/panning
-    const g = svg.append('g')
+  // Update elements whenever chain changes
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
 
-    // Prepare data
-    const nodes: D3Node[] = chain.nodes.map(node => ({
-      ...node,
-      x: node.position_x || Math.random() * width,
-      y: node.position_y || Math.random() * height
+    // Build elements
+    const nodeElems: ElementDefinition[] = chain.nodes.map((n) => ({
+      group: 'nodes',
+      data: {
+        id: n.id,
+        label: n.label || n.node_type,
+        _raw: n,
+      },
+      position: n.position_x && n.position_y ? { x: n.position_x, y: n.position_y } : undefined,
+      classes: n.node_type,
     }))
 
-    const edges: D3Edge[] = chain.edges.map(edge => {
-      const source = nodes.find(n => n.id === edge.from_node_id)!
-      const target = nodes.find(n => n.id === edge.to_node_id)!
-      return { ...edge, source, target }
-    })
+    const edgeElems: ElementDefinition[] = chain.edges.map((e) => ({
+      group: 'edges',
+      data: {
+        id: e.id,
+        source: e.from_node_id,
+        target: e.to_node_id,
+        relLabel: (e.relationship_type || '').replace('_', ' '),
+        _raw: e,
+      },
+      classes: e.relationship_type,
+    }))
 
-    // Create force simulation
-    const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(edges).id((d: any) => d.id).distance(150))
-      .force('charge', d3.forceManyBody().strength(-300))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(40))
+    cy.elements().remove()
+    cy.add([...nodeElems, ...edgeElems])
+    cy.fit(undefined, 50)
 
-    // Create arrow markers for directed edges
-    const defs = g.append('defs')
-    
-    defs.append('marker')
-      .attr('id', 'arrowhead')
-      .attr('viewBox', '-0 -5 10 10')
-      .attr('refX', 25)
-      .attr('refY', 0)
-      .attr('orient', 'auto')
-      .attr('markerWidth', 8)
-      .attr('markerHeight', 8)
-      .attr('xoverflow', 'visible')
-      .append('svg:path')
-      .attr('d', 'M 0,-5 L 10 ,0 L 0,5')
-      .attr('fill', '#666')
-      .style('stroke', 'none')
+    runLayout()
+  }, [chain])
 
-    // Create edges
-    const link = g.append('g')
-      .attr('class', 'links')
-      .selectAll('line')
-      .data(edges)
-      .enter().append('line')
-      .attr('class', 'edge')
-      .attr('stroke', (d) => getEdgeColor(d.relationship_type))
-      .attr('stroke-width', (d) => Math.max(1, d.confidence / 25))
-      .attr('stroke-opacity', 0.8)
-      .attr('marker-end', 'url(#arrowhead)')
-      .style('cursor', 'pointer')
-      .on('click', (event, d) => {
-        event.stopPropagation()
-        setSelectedEdge(d.id)
-        onEdgeClick?.(d)
-      })
-      .on('mouseover', function(event, d) {
-        d3.select(this).attr('stroke-width', Math.max(3, d.confidence / 15))
-        
-        // Show tooltip (implementation removed for now)
-          .style('font-size', '12px')
-          .style('pointer-events', 'none')
-          .style('z-index', '1000')
-          .html(`
-            <strong>${d.relationship_type}</strong><br/>
-            Confidence: ${d.confidence}%<br/>
-            Created: ${new Date(d.created_at).toLocaleDateString()}
-          `)
-          .style('left', (event.pageX + 10) + 'px')
-          .style('top', (event.pageY - 10) + 'px')
-      })
-      .on('mouseout', function(_event, d) {
-        d3.select(this).attr('stroke-width', Math.max(1, d.confidence / 25))
-        d3.selectAll('.fraud-chain-tooltip').remove()
-      })
+  // Re-run layout when mode changes
+  useEffect(() => {
+    runLayout()
+  }, [layoutMode])
 
-    // Create nodes
-    const node = g.append('g')
-      .attr('class', 'nodes')
-      .selectAll('g')
-      .data(nodes)
-      .enter().append('g')
-      .attr('class', 'node')
-      .style('cursor', 'pointer')
-      .call(d3.drag<SVGGElement, D3Node>()
-        .on('start', (event, d) => {
-          if (!event.active) simulation.alphaTarget(0.3).restart()
-          d.fx = d.x
-          d.fy = d.y
-        })
-        .on('drag', (event, d) => {
-          d.fx = event.x
-          d.fy = event.y
-        })
-        .on('end', (event, d) => {
-          if (!event.active) simulation.alphaTarget(0)
-          d.fx = null
-          d.fy = null
-        })
-      )
-
-    // Add circles for nodes
-    node.append('circle')
-      .attr('r', (d) => getNodeRadius(d.node_type))
-      .attr('fill', (d) => getNodeColor(d.node_type))
-      .attr('stroke', (d) => selectedNode === d.id ? '#ff6b35' : '#fff')
-      .attr('stroke-width', (d) => selectedNode === d.id ? 3 : 2)
-      .on('click', (event, d) => {
-        event.stopPropagation()
-        setSelectedNode(d.id)
-        onNodeClick?.(d)
-      })
-
-    // Add icons for different node types
-    node.append('text')
-      .attr('text-anchor', 'middle')
-      .attr('dy', '0.35em')
-      .attr('font-size', '14px')
-      .attr('fill', 'white')
-      .attr('font-weight', 'bold')
-      .text((d) => getNodeIcon(d.node_type))
-
-    // Add labels
-    node.append('text')
-      .attr('text-anchor', 'middle')
-      .attr('dy', '2.5em')
-      .attr('font-size', '10px')
-      .attr('fill', '#333')
-      .text((d) => d.label || d.node_type)
-      .call(wrapText, 80)
-
-    // Update positions on simulation tick
-    simulation.on('tick', () => {
-      link
-        .attr('x1', (d: any) => d.source.x)
-        .attr('y1', (d: any) => d.source.y)
-        .attr('x2', (d: any) => d.target.x)
-        .attr('y2', (d: any) => d.target.y)
-
-      node.attr('transform', (d) => `translate(${d.x},${d.y})`)
-    })
-
-    // Clear selections when clicking on empty space
-    svg.on('click', () => {
-      setSelectedNode(null)
-      setSelectedEdge(null)
-    })
-
-    return () => {
-      simulation.stop()
+  const runLayout = () => {
+    const cy = cyRef.current
+    if (!cy) return
+    if (layoutMode === 'fcose') {
+      cy.layout({
+        name: 'fcose',
+        animate: true,
+        animationDuration: 400,
+        quality: 'default',
+        randomize: true,
+        nodeSeparation: 120,
+        nodeDimensionsIncludeLabels: true,
+        idealEdgeLength: 140,
+      } as any).run()
+    } else {
+      cy.layout({
+        name: 'dagre',
+        rankDir: 'TB',
+        nodeSep: 60,
+        edgeSep: 20,
+        rankSep: 100,
+        animate: true,
+      } as any).run()
     }
-  }, [chain, selectedNode, selectedEdge, onNodeClick, onEdgeClick])
-
-  const getNodeColor = (nodeType: string): string => {
-    const colors = {
-      tip: '#3b82f6',      // Blue
-      assessment: '#ef4444', // Red
-      document: '#10b981',   // Green
-      stock: '#f59e0b',      // Amber
-      complaint: '#8b5cf6',  // Purple
-      advisor: '#06b6d4'     // Cyan
-    }
-    return colors[nodeType as keyof typeof colors] || '#6b7280'
   }
 
-  const getNodeRadius = (nodeType: string): number => {
-    const sizes = {
-      tip: 25,
-      assessment: 30,
-      document: 25,
-      stock: 20,
-      complaint: 25,
-      advisor: 25
-    }
-    return sizes[nodeType as keyof typeof sizes] || 25
-  }
-
-  const getNodeIcon = (nodeType: string): string => {
-    const icons = {
-      tip: '💡',
-      assessment: '⚠️',
-      document: '📄',
-      stock: '📈',
-      complaint: '📢',
-      advisor: '👤'
-    }
-    return icons[nodeType as keyof typeof icons] || '●'
-  }
-
-  const getEdgeColor = (relationshipType: string): string => {
-    const colors = {
-      leads_to: '#3b82f6',
-      references: '#10b981',
-      mentions: '#f59e0b',
-      involves: '#ef4444',
-      similar_pattern: '#8b5cf6',
-      escalates_to: '#dc2626'
-    }
-    return colors[relationshipType as keyof typeof colors] || '#6b7280'
-  }
-
-  const wrapText = (text: any, width: number) => {
-    text.each(function(this: SVGTextElement) {
-      const textElement = d3.select(this)
-      const words = textElement.text().split(/\s+/).reverse()
-      let word: string | undefined
-      let line: string[] = []
-      let lineNumber = 0
-      const lineHeight = 1.1
-      const y = textElement.attr('y')
-      const dy = parseFloat(textElement.attr('dy'))
-      let tspan = textElement.text(null).append('tspan').attr('x', 0).attr('y', y).attr('dy', dy + 'em')
-      
-      while (word = words.pop()) {
-        line.push(word)
-        tspan.text(line.join(' '))
-        if (tspan.node()!.getComputedTextLength() > width) {
-          line.pop()
-          tspan.text(line.join(' '))
-          line = [word]
-          tspan = textElement.append('tspan').attr('x', 0).attr('y', y).attr('dy', ++lineNumber * lineHeight + dy + 'em').text(word)
-        }
-      }
-    })
-  }
+  // Utilities retained for legend only (styles moved to Cytoscape stylesheet)
 
   const handleZoomIn = () => {
-    const svg = d3.select(svgRef.current)
-    svg.transition().call(
-      d3.zoom<SVGSVGElement, unknown>().scaleBy as any,
-      1.5
-    )
+    const cy = cyRef.current
+    if (!cy) return
+    cy.zoom({ level: cy.zoom() * 1.2, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } })
   }
 
   const handleZoomOut = () => {
-    const svg = d3.select(svgRef.current)
-    svg.transition().call(
-      d3.zoom<SVGSVGElement, unknown>().scaleBy as any,
-      1 / 1.5
-    )
+    const cy = cyRef.current
+    if (!cy) return
+    cy.zoom({ level: cy.zoom() / 1.2, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } })
   }
 
   const handleResetZoom = () => {
-    const svg = d3.select(svgRef.current)
-    svg.transition().call(
-      d3.zoom<SVGSVGElement, unknown>().transform as any,
-      d3.zoomIdentity
-    )
+    const cy = cyRef.current
+    if (!cy) return
+    cy.fit(undefined, 50)
+    setZoomLevel(Math.round(cy.zoom() * 100))
+  }
+
+  const handleExportPNG = async () => {
+    const cy = cyRef.current
+    if (!cy) return
+    const png64 = cy.png({ full: true, bg: '#0b1220', scale: 2 })
+    const a = document.createElement('a')
+    a.href = png64
+    a.download = 'fraud_chain.png'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   return (
-    <div className={`fraud-chain-visualization ${className}`}>
+    <div ref={containerRef} className={`fraud-chain-visualization relative ${className}`}>
       {/* Controls */}
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
         <button
@@ -337,11 +252,35 @@ const FraudChainVisualization: React.FC<FraudChainVisualizationProps> = ({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
+        {/* Layout toggle */}
+        <div className="bg-dark-800 shadow-lg rounded-md p-1 border border-dark-primary flex gap-1" title="Layout">
+          <button
+            className={`px-2 py-1 rounded ${layoutMode === 'fcose' ? 'bg-primary-600 text-white' : 'hover:bg-dark-700 text-dark-primary'}`}
+            onClick={() => setLayoutMode('fcose')}
+          >
+            fCoSE
+          </button>
+          <button
+            className={`px-2 py-1 rounded ${layoutMode === 'hierarchical' ? 'bg-primary-600 text-white' : 'hover:bg-dark-700 text-dark-primary'}`}
+            onClick={() => setLayoutMode('hierarchical')}
+          >
+            Hierarchy
+          </button>
+        </div>
+        <button
+          onClick={handleExportPNG}
+          className="bg-primary-600 shadow-lg rounded-md p-2 hover:bg-primary-700 transition-colors text-white"
+          title="Export PNG"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+          </svg>
+        </button>
       </div>
 
       {/* Zoom level indicator */}
       <div className="absolute top-4 left-4 z-10 bg-dark-800 shadow-lg rounded-md px-3 py-1 text-sm border border-dark-primary text-dark-primary">
-        Zoom: {Math.round(zoomLevel * 100)}%
+        Zoom: {zoomLevel}%
       </div>
 
       {/* Legend */}
@@ -375,9 +314,9 @@ const FraudChainVisualization: React.FC<FraudChainVisualizationProps> = ({
         </div>
       </div>
 
-      {/* Main SVG */}
-      <svg
-        ref={svgRef}
+      {/* Cytoscape container */}
+      <div
+        ref={containerRef}
         className="w-full h-full border border-dark-primary rounded-lg bg-dark-950"
         style={{ minHeight: '600px' }}
       />

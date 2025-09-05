@@ -1,33 +1,45 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from typing import Generator
+ 
+# Load environment variables from a local .env file (backend/.env) if present
+# This allows DATABASE_URL and other secrets to be provided without setting OS-level env vars.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    # Attempt to load ../../backend/.env relative to this file
+    _ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    load_dotenv(dotenv_path=_ENV_PATH)
+except Exception:
+    # dotenv is optional; if not installed or .env missing, we fallback to OS env
+    pass
 
-"""Database configuration.
+# Database URL
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Please configure it to your PostgreSQL URL, e.g. "
+        "postgresql+psycopg2://USER:PASS@HOST:5432/DBNAME"
+    )
 
-Uses env var DATABASE_URL if provided, falling back to local SQLite for demo.
-Automatically applies SQLite-only connect_args and enables pool_pre_ping for
-managed databases like PostgreSQL to keep connections healthy.
-"""
+# For SQLite, need special connect args
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-# Resolve database URL from environment (e.g., postgresql+psycopg://user:pass@host:5432/db)
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./iris_regtech.db")
-
-# Apply SQLite-specific connect args only when using SQLite
-connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
-
+# SQLAlchemy engine and session
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
+    DATABASE_URL,
     connect_args=connect_args,
+    future=True,
+    # Helps keep long-lived connections healthy (esp. with Postgres)
     pool_pre_ping=True,
 )
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+# Base declarative class
 Base = declarative_base()
 
-# Dependency to get database session
-def get_db():
+# Dependency for FastAPI routes
+def get_db() -> Generator:
     db = SessionLocal()
     try:
         yield db

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import axios from 'axios';
+import api from '../services/api';
 import { ExportUtils } from './ExportUtils';
 import RealTimeMetrics from './RealTimeMetrics';
 import ComparativeAnalysis from './ComparativeAnalysis';
@@ -93,14 +94,12 @@ const AnalyticsDashboard: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      // Check if backend is available
-      const baseURL = 'http://localhost:8000';
-      
+      // Use shared API client which routes through Vite proxy to backend (baseURL: /api)
       const [summaryRes, trendsRes, sectorsRes, regionsRes] = await Promise.all([
-        axios.get(`${baseURL}/api/analytics/summary`),
-        axios.get(`${baseURL}/api/analytics/trends/fraud?days=${selectedTimeRange}`),
-        axios.get(`${baseURL}/api/analytics/analysis/sectors`),
-        axios.get(`${baseURL}/api/analytics/analysis/regions`)
+        api.get(`/analytics/summary`),
+        api.get(`/analytics/trends/fraud`, { params: { days: selectedTimeRange } }),
+        api.get(`/analytics/analysis/sectors`),
+        api.get(`/analytics/analysis/regions`)
       ]);
 
       setSummary(summaryRes.data.data);

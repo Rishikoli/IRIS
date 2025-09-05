@@ -210,6 +210,155 @@ const UploadPDFPage = () => {
               </div>
             </div>
 
+            {/* Gemini Insights */}
+            {!analysis.gemini_analysis && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <h4 className="text-md font-semibold text-yellow-900 mb-2">AI Review Not Available</h4>
+                <p className="text-sm text-yellow-800">
+                  Gemini Insights could not be generated. This often happens if OCR did not extract any text or if the Gemini API key is not configured.
+                </p>
+                <ul className="mt-2 text-sm text-yellow-800 list-disc pl-5">
+                  <li>Install Tesseract OCR and Poppler. Then restart the backend.</li>
+                  <li>Set <code className="bg-yellow-100 px-1 rounded">GEMINI_API_KEY</code> in backend environment for real AI analysis.</li>
+                </ul>
+              </div>
+            )}
+            {analysis.gemini_analysis && (
+              <div>
+                <h4 className="text-md font-semibold text-dark-primary mb-3">🤖 Gemini Insights</h4>
+                <div className="bg-purple-50 rounded-lg p-4 space-y-3 border border-purple-200">
+                  {analysis.gemini_analysis.note && (
+                    <div className="bg-yellow-100 border border-yellow-300 text-yellow-900 rounded p-3 text-sm">
+                      {analysis.gemini_analysis.note}
+                      <div className="mt-2 text-xs text-yellow-800">
+                        If you see this often, please install Tesseract OCR and Poppler, and set a GEMINI_API_KEY on the backend.
+                      </div>
+                    </div>
+                  )}
+                  {/* High-level Gemini assessment */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-600">Assessment:</span>
+                      <span className="ml-2 font-medium capitalize">{analysis.gemini_analysis?.authenticity_assessment || 'n/a'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">AI Confidence:</span>
+                      <span className="ml-2 font-medium">{Math.round(((analysis.gemini_analysis?.confidence || 0) * 100))}%</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Type:</span>
+                      <span className="ml-2 font-medium">{analysis.gemini_analysis?.document_type_assessment || 'n/a'}</span>
+                    </div>
+                  </div>
+
+                  {/* Red flags / positives */}
+                  {(analysis.gemini_analysis?.red_flags?.length || 0) > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-red-800 mb-1">Red Flags</h5>
+                      <ul className="text-sm text-red-700 list-disc pl-5">
+                        {analysis.gemini_analysis.red_flags.map((rf: string, i: number) => (
+                          <li key={i}>{rf}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {(analysis.gemini_analysis?.positive_indicators?.length || 0) > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-green-800 mb-1">Positive Indicators</h5>
+                      <ul className="text-sm text-green-700 list-disc pl-5">
+                        {analysis.gemini_analysis.positive_indicators.map((pi: string, i: number) => (
+                          <li key={i}>{pi}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Balance Sheet cross-validation */}
+                  {analysis.gemini_analysis?.balance_sheet_check && (
+                    <div className="border-t pt-3">
+                      <h5 className="font-medium text-gray-800 mb-2">📊 Balance Sheet Validation (Gemini × FMP)</h5>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-600">Symbol:</span>
+                          <span className="ml-2 font-medium">{analysis.gemini_analysis.balance_sheet_check.symbol || '—'}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Accounting Identity:</span>
+                          {analysis.gemini_analysis.balance_sheet_check.checks?.accounting_identity_ok === true ? (
+                            <span className="ml-2 font-medium text-green-700">OK</span>
+                          ) : analysis.gemini_analysis.balance_sheet_check.checks?.accounting_identity_ok === false ? (
+                            <span className="ml-2 font-medium text-red-700">Mismatch</span>
+                          ) : (
+                            <span className="ml-2 text-gray-600">Unknown</span>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-gray-600">AI Extraction Confidence:</span>
+                          <span className="ml-2 font-medium">{Math.round((analysis.gemini_analysis.balance_sheet_check.confidence || 0) * 100)}%</span>
+                        </div>
+                      </div>
+
+                      {/* Extracted key figures */}
+                      <div className="mt-3">
+                        <h6 className="text-sm font-medium text-gray-700 mb-1">Extracted Figures</h6>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                          <div className="bg-white rounded p-2 border">
+                            <div className="text-gray-500">Total Assets</div>
+                            <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.extracted?.total_assets ?? '—'}</div>
+                          </div>
+                          <div className="bg-white rounded p-2 border">
+                            <div className="text-gray-500">Total Liabilities</div>
+                            <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.extracted?.total_liabilities ?? '—'}</div>
+                          </div>
+                          <div className="bg-white rounded p-2 border">
+                            <div className="text-gray-500">Total Equity</div>
+                            <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.extracted?.total_equity ?? '—'}</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Discrepancies */}
+                      {analysis.gemini_analysis.balance_sheet_check.checks?.discrepancies?.length > 0 && (
+                        <div className="mt-3">
+                          <h6 className="text-sm font-medium text-red-800 mb-1">Discrepancies</h6>
+                          <ul className="text-xs text-red-700 list-disc pl-5">
+                            {analysis.gemini_analysis.balance_sheet_check.checks.discrepancies.map((d: string, i: number) => (
+                              <li key={i}>{d}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* FMP summary (if available) */}
+                      {analysis.gemini_analysis.balance_sheet_check.fmp && !analysis.gemini_analysis.balance_sheet_check.fmp.error && (
+                        <div className="mt-3">
+                          <h6 className="text-sm font-medium text-gray-700 mb-1">FMP Financial Snapshot</h6>
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                            <div className="bg-white rounded p-2 border">
+                              <div className="text-gray-500">Revenue</div>
+                              <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.fmp.revenue ?? '—'}</div>
+                            </div>
+                            <div className="bg-white rounded p-2 border">
+                              <div className="text-gray-500">Net Income</div>
+                              <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.fmp.net_income ?? '—'}</div>
+                            </div>
+                            <div className="bg-white rounded p-2 border">
+                              <div className="text-gray-500">Debt/Equity</div>
+                              <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.fmp.debt_to_equity ?? '—'}</div>
+                            </div>
+                            <div className="bg-white rounded p-2 border">
+                              <div className="text-gray-500">P/E</div>
+                              <div className="font-semibold">{analysis.gemini_analysis.balance_sheet_check.fmp.pe_ratio ?? '—'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Enhanced Multi-Source Validation */}
             {analysis.enhanced_validation && (
               <div>
@@ -485,6 +634,13 @@ const UploadPDFPage = () => {
             )}
 
             {/* OCR Text Preview */}
+            {!analysis.ocr_text && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <div className="text-sm text-yellow-800">
+                  No OCR text was extracted. Install Tesseract OCR and Poppler to improve extraction for scanned PDFs.
+                </div>
+              </div>
+            )}
             {analysis.ocr_text && (
               <div>
                 <h4 className="text-md font-semibold text-dark-primary mb-3">Extracted Text Preview</h4>

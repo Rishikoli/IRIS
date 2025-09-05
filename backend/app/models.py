@@ -16,8 +16,39 @@ class Tip(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationship to assessments
-    assessments = relationship("Assessment", back_populates="tip")
+    # Relationships
+    assessments = relationship("Assessment", back_populates="tip", cascade="all, delete-orphan")
+
+# Investigation Case Management Models
+class InvestigationCase(Base):
+    __tablename__ = "investigation_cases"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(50), default="open")  # 'open', 'in_progress', 'closed'
+    priority = Column(String(20), default="medium")  # 'low', 'medium', 'high'
+    assigned_to = Column(String(100), nullable=True)
+    related_entity_type = Column(String(50), nullable=True)  # 'fraud_chain', 'assessment', 'pdf_check'
+    related_entity_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    notes = relationship("CaseNote", back_populates="case", cascade="all, delete-orphan")
+
+
+class CaseNote(Base):
+    __tablename__ = "case_notes"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id = Column(String, ForeignKey("investigation_cases.id"), nullable=False)
+    author = Column(String(100), nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    case = relationship("InvestigationCase", back_populates="notes")
 
 class Assessment(Base):
     __tablename__ = "assessments"

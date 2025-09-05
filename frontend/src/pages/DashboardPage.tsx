@@ -34,7 +34,7 @@ const DashboardPage = () => {
     try {
       const response = await tipApi.checkTip({
         message,
-        source: 'dashboard'
+        source: 'manual'
       })
       setTipAnalysisResult(response.data)
     } catch (err: any) {
@@ -103,7 +103,7 @@ const DashboardPage = () => {
     { id: 'check-tip', name: 'Check Tip', icon: '🔍' },
     { id: 'verify-advisor', name: 'Verify Advisor', icon: '👤' },
     { id: 'upload-pdf', name: 'Upload PDF', icon: '📄' },
-    { id: 'review', name: 'Review Queue', icon: '⚖️' }
+    // Removed Review tab for now
   ]
 
   const renderTabContent = () => {
@@ -155,7 +155,15 @@ const DashboardPage = () => {
                 <RiskBadge
                   level={tipAnalysisResult.assessment.level}
                   score={tipAnalysisResult.assessment.score}
-                  reasons={tipAnalysisResult.assessment.reasons}
+                  reasons={Array.isArray(tipAnalysisResult.assessment.reasons) 
+                    ? tipAnalysisResult.assessment.reasons.map(reason => 
+                        typeof reason === 'string' ? reason : 
+                        typeof reason === 'object' && reason !== null ? 
+                          (reason as any).msg || (reason as any).type || JSON.stringify(reason) :
+                          String(reason)
+                      )
+                    : []
+                  }
                 />
 
                 <div className="bg-primary-900/30  rounded-lg shadow-md p-6">
@@ -191,7 +199,7 @@ const DashboardPage = () => {
 
                   <div className="mt-6 pt-4 border-t border-gray-200">
                     <div className="flex justify-between items-center text-sm text-gray-500">
-                      <span>Confidence: {Math.round(tipAnalysisResult.assessment.confidence * 100)}%</span>
+                      <span>Confidence: {Math.round((tipAnalysisResult.assessment.confidence || 0) * 100)}%</span>
                       <span>Analyzed: {new Date(tipAnalysisResult.assessment.timestamp).toLocaleString()}</span>
                     </div>
                   </div>
@@ -221,12 +229,6 @@ const DashboardPage = () => {
               <p className="text-dark-primary">
                 Verify if a financial advisor is registered with SEBI and check their credentials.
               </p>
-
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                <p className="text-yellow-800 text-sm">
-                  <strong>Coming Soon:</strong> SEBI API integration for real-time advisor verification.
-                </p>
-              </div>
 
               <div className="space-y-4">
                 <div>
@@ -399,6 +401,155 @@ const DashboardPage = () => {
                     </div>
                   </div>
 
+                  {/* Gemini Insights */}
+                  {!pdfAnalysisResult.gemini_analysis && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <h4 className="text-md font-semibold text-yellow-900 mb-2">AI Review Not Available</h4>
+                      <p className="text-sm text-yellow-800">
+                        Gemini Insights could not be generated. This can happen if OCR did not extract any text or the Gemini API key is not configured.
+                      </p>
+                      <ul className="mt-2 text-sm text-yellow-800 list-disc pl-5">
+                        <li>Install Tesseract OCR and Poppler. Then restart the backend.</li>
+                        <li>Set <code className="bg-yellow-100 px-1 rounded">GEMINI_API_KEY</code> in backend environment for real AI analysis.</li>
+                      </ul>
+                    </div>
+                  )}
+                  {pdfAnalysisResult.gemini_analysis && (
+                    <div>
+                      <h4 className="text-md font-semibold text-dark-primary mb-3">🤖 Gemini Insights</h4>
+                      <div className="bg-purple-50 rounded-lg p-4 space-y-3 border border-purple-200">
+                        {pdfAnalysisResult.gemini_analysis.note && (
+                          <div className="bg-yellow-100 border border-yellow-300 text-yellow-900 rounded p-3 text-sm">
+                            {pdfAnalysisResult.gemini_analysis.note}
+                            <div className="mt-2 text-xs text-yellow-800">
+                              If this occurs frequently, please install Tesseract OCR and Poppler, and set a GEMINI_API_KEY on the backend.
+                            </div>
+                          </div>
+                        )}
+                        {/* High-level Gemini assessment */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                          <div>
+                            <span className="text-gray-600">Assessment:</span>
+                            <span className="ml-2 font-medium capitalize">{pdfAnalysisResult.gemini_analysis?.authenticity_assessment || 'n/a'}</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-600">AI Confidence:</span>
+                            <span className="ml-2 font-medium">{Math.round(((pdfAnalysisResult.gemini_analysis?.confidence || 0) * 100))}%</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-600">Type:</span>
+                            <span className="ml-2 font-medium">{pdfAnalysisResult.gemini_analysis?.document_type_assessment || 'n/a'}</span>
+                          </div>
+                        </div>
+
+                        {/* Red flags / positives */}
+                        {(pdfAnalysisResult.gemini_analysis?.red_flags?.length || 0) > 0 && (
+                          <div>
+                            <h5 className="text-sm font-medium text-red-800 mb-1">Red Flags</h5>
+                            <ul className="text-sm text-red-700 list-disc pl-5">
+                              {pdfAnalysisResult.gemini_analysis.red_flags.map((rf: string, i: number) => (
+                                <li key={i}>{rf}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {(pdfAnalysisResult.gemini_analysis?.positive_indicators?.length || 0) > 0 && (
+                          <div>
+                            <h5 className="text-sm font-medium text-green-800 mb-1">Positive Indicators</h5>
+                            <ul className="text-sm text-green-700 list-disc pl-5">
+                              {pdfAnalysisResult.gemini_analysis.positive_indicators.map((pi: string, i: number) => (
+                                <li key={i}>{pi}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Balance Sheet cross-validation */}
+                        {pdfAnalysisResult.gemini_analysis?.balance_sheet_check && (
+                          <div className="border-t pt-3">
+                            <h5 className="font-medium text-gray-800 mb-2">📊 Balance Sheet Validation (Gemini × FMP)</h5>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                              <div>
+                                <span className="text-gray-600">Symbol:</span>
+                                <span className="ml-2 font-medium">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.symbol || '—'}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-600">Accounting Identity:</span>
+                                {pdfAnalysisResult.gemini_analysis.balance_sheet_check.checks?.accounting_identity_ok === true ? (
+                                  <span className="ml-2 font-medium text-green-700">OK</span>
+                                ) : pdfAnalysisResult.gemini_analysis.balance_sheet_check.checks?.accounting_identity_ok === false ? (
+                                  <span className="ml-2 font-medium text-red-700">Mismatch</span>
+                                ) : (
+                                  <span className="ml-2 text-gray-600">Unknown</span>
+                                )}
+                              </div>
+                              <div>
+                                <span className="text-gray-600">AI Extraction Confidence:</span>
+                                <span className="ml-2 font-medium">{Math.round((pdfAnalysisResult.gemini_analysis.balance_sheet_check.confidence || 0) * 100)}%</span>
+                              </div>
+                            </div>
+
+                            {/* Extracted key figures */}
+                            <div className="mt-3">
+                              <h6 className="text-sm font-medium text-gray-700 mb-1">Extracted Figures</h6>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                                <div className="bg-white rounded p-2 border">
+                                  <div className="text-gray-500">Total Assets</div>
+                                  <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.extracted?.total_assets ?? '—'}</div>
+                                </div>
+                                <div className="bg-white rounded p-2 border">
+                                  <div className="text-gray-500">Total Liabilities</div>
+                                  <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.extracted?.total_liabilities ?? '—'}</div>
+                                </div>
+                                <div className="bg-white rounded p-2 border">
+                                  <div className="text-gray-500">Total Equity</div>
+                                  <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.extracted?.total_equity ?? '—'}</div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Discrepancies */}
+                            {pdfAnalysisResult.gemini_analysis.balance_sheet_check.checks?.discrepancies?.length > 0 && (
+                              <div className="mt-3">
+                                <h6 className="text-sm font-medium text-red-800 mb-1">Discrepancies</h6>
+                                <ul className="text-xs text-red-700 list-disc pl-5">
+                                  {pdfAnalysisResult.gemini_analysis.balance_sheet_check.checks.discrepancies.map((d: string, i: number) => (
+                                    <li key={i}>{d}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* FMP summary (if available) */}
+                            {pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp && !pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp.error && (
+                              <div className="mt-3">
+                                <h6 className="text-sm font-medium text-gray-700 mb-1">FMP Financial Snapshot</h6>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                                  <div className="bg-white rounded p-2 border">
+                                    <div className="text-gray-500">Revenue</div>
+                                    <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp.revenue ?? '—'}</div>
+                                  </div>
+                                  <div className="bg-white rounded p-2 border">
+                                    <div className="text-gray-500">Net Income</div>
+                                    <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp.net_income ?? '—'}</div>
+                                  </div>
+                                  <div className="bg-white rounded p-2 border">
+                                    <div className="text-gray-500">Debt/Equity</div>
+                                    <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp.debt_to_equity ?? '—'}</div>
+                                  </div>
+                                  <div className="bg-white rounded p-2 border">
+                                    <div className="text-gray-500">P/E</div>
+                                    <div className="font-semibold">{pdfAnalysisResult.gemini_analysis.balance_sheet_check.fmp.pe_ratio ?? '—'}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Detected Anomalies */}
                   {pdfAnalysisResult.anomalies && pdfAnalysisResult.anomalies.length > 0 && (
                     <div>
@@ -457,6 +608,13 @@ const DashboardPage = () => {
                   )}
 
                   {/* OCR Text Preview */}
+                  {!pdfAnalysisResult.ocr_text && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                      <div className="text-sm text-yellow-800">
+                        No OCR text was extracted. Install Tesseract OCR and Poppler to improve extraction for scanned PDFs.
+                      </div>
+                    </div>
+                  )}
                   {pdfAnalysisResult.ocr_text && (
                     <div>
                       <h4 className="text-md font-semibold text-dark-primary mb-3">Extracted Text Preview</h4>
@@ -508,7 +666,7 @@ const DashboardPage = () => {
               </div>
             )}
 
-            {/* Information Section */}
+            {/* Information Section (disclaimer removed per request) */}
             <div className="bg-gray-50 rounded-lg p-6">
               <h3 className="text-lg font-semibold text-dark-primary mb-4">How PDF Authentication Works</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -531,13 +689,6 @@ const DashboardPage = () => {
                   </ul>
                 </div>
               </div>
-
-              <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <p className="text-sm text-yellow-800">
-                  <strong>Disclaimer:</strong> This analysis is for informational purposes only.
-                  Always verify important documents through official channels and regulatory authorities.
-                </p>
-              </div>
             </div>
           </div>
         )
@@ -548,89 +699,7 @@ const DashboardPage = () => {
         )
 
       case 'review':
-        return (
-          <div className="space-y-6">
-            <div className="bg-primary-900/30  rounded-lg shadow-md p-6">
-              <h2 className="text-2xl font-bold text-dark-primary mb-4">
-                Human-in-the-Loop Review
-              </h2>
-              <p className="text-dark-primary">
-                Review AI decisions and provide overrides with explanations for continuous improvement.
-              </p>
-
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                <p className="text-yellow-800 text-sm">
-                  <strong>Coming Soon:</strong> Review workflow and decision override system.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-primary-900/30  rounded-lg shadow-md">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-semibold text-dark-primary">Review Queue</h3>
-                  <span className="px-3 py-1 text-sm font-medium bg-blue-100 text-blue-800 rounded-full">
-                    3 Pending
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-6">
-                <div className="space-y-4">
-                  {[
-                    { id: 1, type: 'Tip Analysis', confidence: 88, decision: 'High risk investment tip with guaranteed returns promise' },
-                    { id: 2, type: 'PDF Check', confidence: 92, decision: 'Document shows signs of digital manipulation' },
-                    { id: 3, type: 'Advisor Verification', confidence: 85, decision: 'Advisor claims unverifiable credentials' }
-                  ].map((item) => (
-                    <div key={item.id} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-sm font-medium text-dark-primary">
-                            {item.type} #{item.id.toString().padStart(3, '0')}
-                          </span>
-                          <span className="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
-                            Pending Review
-                          </span>
-                        </div>
-                        <span className="text-sm text-gray-500">
-                          AI Confidence: {item.confidence}%
-                        </span>
-                      </div>
-
-                      <p className="text-sm text-gray-600 mb-3">
-                        AI Decision: {item.decision}
-                      </p>
-
-                      <div className="flex space-x-2">
-                        <button
-                          type="button"
-                          className="px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-md hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled
-                        >
-                          ✓ Approve
-                        </button>
-                        <button
-                          type="button"
-                          className="px-3 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-md hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled
-                        >
-                          ✗ Override
-                        </button>
-                        <button
-                          type="button"
-                          className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled
-                        >
-                          📋 Details
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )
+        return null
 
       default:
         return null

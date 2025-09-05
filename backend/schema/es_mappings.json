@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "analysis": {
+      "analyzer": {
+        "english_folded": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding", "porter_stem"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "false",
+    "_source": {"enabled": true},
+    "properties": {
+      "id": {"type": "keyword"},
+      "entity_type": {"type": "keyword"},
+      "title": {"type": "text", "analyzer": "english_folded"},
+      "message": {"type": "text", "analyzer": "english_folded"},
+      "name": {"type": "text", "analyzer": "english_folded"},
+      "company": {"type": "text", "analyzer": "english_folded"},
+      "summary": {"type": "text", "analyzer": "english_folded"},
+      "content": {"type": "text", "analyzer": "english_folded"},
+      "symbols_text": {"type": "text", "analyzer": "english_folded"},
+      "risk": {"type": "keyword"},
+      "risk_rank": {"type": "integer"},
+      "risk_score": {"type": "float"},
+      "sector": {"type": "keyword"},
+      "region": {"type": "keyword"},
+      "created_at": {"type": "date", "format": "strict_date_optional_time||epoch_millis"},
+      "extra": {"type": "object", "enabled": true}
+    }
+  }
+}

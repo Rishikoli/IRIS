@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Menu, X, Shield, BarChart3, Network, Users, TrendingUp } from 'lucide-react'
+import { Menu, X, Shield, BarChart3, TrendingUp, FileSearch } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 import NotificationPanel from './NotificationPanel'
 import { useWebSocket } from '../hooks/useWebSocket'
@@ -54,8 +54,7 @@ const NavBar = () => {
     { label: 'Home', path: '/', icon: Shield },
     { label: 'Dashboard', path: '/dashboard', icon: BarChart3 },
     { label: 'Analytics', path: '/analytics', icon: TrendingUp },
-    { label: 'Fraud Chains', path: '/fraud-chains', icon: Network },
-    { label: 'Review', path: '/review', icon: Users },
+    { label: 'Investigation', path: '/investigation', icon: FileSearch },
   ]
 
   // Development/demo navigation items (available via direct URL)

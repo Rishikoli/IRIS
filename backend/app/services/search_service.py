@@ -36,19 +36,40 @@ class SearchService:
         must: List[Dict[str, Any]] = []
         filters: List[Dict[str, Any]] = []
 
+        # Fuzzy options precedence: req.fuzzy.max_edits -> req.fuzziness -> AUTO
+        fuzziness_value: Any
+        if req.fuzzy and req.fuzzy.enabled:
+            fuzziness_value = req.fuzzy.max_edits if req.fuzzy.max_edits is not None else (req.fuzziness or "AUTO")
+        else:
+            fuzziness_value = 0  # exact match
+
         must.append({
             "multi_match": {
                 "query": req.query,
-                "fields": ["title^3", "content", "name^2", "company", "summary"],
-                "fuzziness": req.fuzziness or "AUTO"
+                "fields": [
+                    "title^3",
+                    "message^2",
+                    "name^2",
+                    "company^1.5",
+                    "summary",
+                    "content",
+                    "symbols_text"
+                ],
+                "fuzziness": fuzziness_value
             }
         })
 
         if req.filters:
             if req.filters.entity_types:
                 filters.append({"terms": {"entity_type": req.filters.entity_types}})
-            if req.filters.min_risk:
+            if req.filters.risk_levels:
+                filters.append({"terms": {"risk": req.filters.risk_levels}})
+            elif req.filters.min_risk:
                 filters.append({"range": {"risk_rank": {"gte": {"Low":1, "Medium":2, "High":3}[req.filters.min_risk]}}})
+            if req.filters.sector:
+                filters.append({"terms": {"sector": req.filters.sector}})
+            if req.filters.region:
+                filters.append({"terms": {"region": req.filters.region}})
             if req.filters.date_from or req.filters.date_to:
                 rng: Dict[str, Any] = {}
                 if req.filters.date_from:
@@ -57,16 +78,45 @@ class SearchService:
                     rng["lte"] = req.filters.date_to
                 filters.append({"range": {"created_at": rng}})
 
+        # Pagination: prefer page/page_size when provided, fallback to from/size
+        from_val = req.from_
+        size_val = req.size
+        if req.page and req.page_size:
+            size_val = min(req.page_size, 100)
+            from_val = (req.page - 1) * size_val
+
+        # Ranking boosts: risk_score and recency decay
+        functions: List[Dict[str, Any]] = []
+        if req.ranking and req.ranking.boost:
+            b = req.ranking.boost
+            if b.risk_score and b.risk_score > 0:
+                functions.append({
+                    "field_value_factor": {"field": "risk_score", "factor": float(b.risk_score)}
+                })
+            if b.recentness and b.recentness > 0:
+                functions.append({
+                    "gauss": {"created_at": {"origin": "now", "scale": "30d", "offset": "1d", "decay": 0.5}},
+                    "weight": float(b.recentness)
+                })
+
+        base_query: Dict[str, Any] = {
+            "bool": {
+                "must": must,
+                "filter": filters
+            }
+        }
+
+        query: Dict[str, Any]
+        if functions:
+            query = {"function_score": {"query": base_query, "functions": functions, "score_mode": "sum", "boost_mode": "sum"}}
+        else:
+            query = base_query
+
         return {
-            "query": {
-                "bool": {
-                    "must": must,
-                    "filter": filters
-                }
-            },
-            "from": req.from_,
-            "size": req.size,
-            "sort": [{"_score": "desc"}]
+            "query": query,
+            "from": from_val,
+            "size": size_val,
+            "highlight": {"fields": {"message": {}, "title": {}, "content": {}, "summary": {}}}
         }
 
     def search(self, req: SearchRequest) -> SearchResponse:
@@ -77,8 +127,11 @@ class SearchService:
         start = time.time()
         try:
             body = self._build_es_query(req)
-            # Search across multiple indices; they may or may not exist
-            indices = os.getenv("ELASTICSEARCH_INDICES", "tips,advisors,documents")
+            # Indices selection based on request.entities; fallback to env or defaults
+            if req.entities:
+                indices = ",".join(req.entities)
+            else:
+                indices = os.getenv("ELASTICSEARCH_INDICES", "tips,advisors,documents,assessments")
             res = self.client.search(index=indices, body=body, request_timeout=5)
             hits: List[SearchHit] = []
             for h in res.get('hits', {}).get('hits', []):
@@ -87,7 +140,11 @@ class SearchService:
                     id=src.get('id') or 0,
                     entity_type=src.get('entity_type') or 'tip',
                     title=src.get('title') or src.get('name'),
-                    snippet=src.get('snippet') or src.get('summary') or src.get('content', '')[:160],
+                    snippet=(h.get('highlight', {}).get('message', [None])[0]
+                             or h.get('highlight', {}).get('title', [None])[0]
+                             or h.get('highlight', {}).get('content', [None])[0]
+                             or h.get('highlight', {}).get('summary', [None])[0]
+                             or src.get('snippet') or src.get('summary') or src.get('content', '')[:160]),
                     score=float(h.get('_score') or 0.0),
                     risk=src.get('risk'),
                     extra={k: v for k, v in src.items() if k not in ['id','entity_type','title','name','snippet','summary','content','risk']}

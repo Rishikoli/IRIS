@@ -15,6 +15,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-demo_key}
       - FMP_API_KEY=${FMP_API_KEY:-demo_key}
       - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:80
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_INDICES=tips,advisors,documents,assessments
     volumes:
       - ./backend/data:/app/data
       - ./backend/uploads:/app/uploads
@@ -22,6 +24,8 @@ services:
       - iris-network
     depends_on:
       postgres:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -91,6 +95,46 @@ services:
       timeout: 5s
       retries: 5
 
+  # Elasticsearch (single-node, dev only)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: iris-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - iris-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana (dev only)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.4
+    container_name: iris-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - iris-network
+    restart: unless-stopped
+
 networks:
   iris-network:
     driver: bridge
@@ -99,4 +143,6 @@ volumes:
   redis-data:
     driver: local
   postgres-data:
+    driver: local
+  es-data:
     driver: local

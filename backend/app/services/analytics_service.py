@@ -17,12 +17,13 @@ from app.models import (
     FraudChainNode, FraudChainEdge, FMPMarketData, GoogleTrendsData, 
     EconomicTimesArticle, DataIndicator, Forecast
 )
+from app.services.integrations import fmp_client, gemini_client
 
 class AnalyticsService:
     def __init__(self):
         pass
     
-    async def get_platform_summary(self) -> Dict[str, Any]:
+    async def get_platform_summary(self, insights: bool = False) -> Dict[str, Any]:
         """Get comprehensive platform-wide statistics"""
         db = SessionLocal()
         try:
@@ -151,7 +152,12 @@ class AnalyticsService:
                     "pending_reviews": pending_reviews,
                     "completed_reviews": completed_reviews,
                     "review_completion_rate": round((completed_reviews / max(1, completed_reviews + pending_reviews)) * 100, 2)
-                }
+                },
+                "insights": (
+                    self._gen_insights_summary(
+                        total_tips, total_pdf_checks, high_risk_percentage, avg_authenticity_score
+                    ) if insights else None
+                )
             }
         
         except Exception as e:
@@ -160,7 +166,7 @@ class AnalyticsService:
         finally:
             db.close()
     
-    async def get_fraud_trends(self, days: int = 30, granularity: str = "daily") -> Dict[str, Any]:
+    async def get_fraud_trends(self, days: int = 30, granularity: str = "daily", insights: bool = False) -> Dict[str, Any]:
         """Get fraud trend analysis with time-series data"""
         db = SessionLocal()
         try:
@@ -212,7 +218,7 @@ class AnalyticsService:
                     "total": sum(tip_data[date_str].values())
                 })
             
-            return {
+            data = {
                 "period": {
                     "start_date": start_date.isoformat(),
                     "end_date": end_date.isoformat(),
@@ -223,8 +229,13 @@ class AnalyticsService:
                 "summary": {
                     "total_data_points": len(tip_trend_data),
                     "trend_direction": self._calculate_trend_direction(tip_trend_data)
-                }
+                },
             }
+            if insights:
+                _ins = self._gen_insights_trends(data)
+                if _ins:
+                    data["insights"] = _ins
+            return data
         
         except Exception as e:
             print(f"Error getting fraud trends: {e}")
@@ -232,7 +243,7 @@ class AnalyticsService:
         finally:
             db.close()
     
-    async def get_sector_analysis(self) -> Dict[str, Any]:
+    async def get_sector_analysis(self, insights: bool = False) -> Dict[str, Any]:
         """Get sector-wise fraud pattern analysis"""
         db = SessionLocal()
         try:
@@ -261,7 +272,7 @@ class AnalyticsService:
                     "risk_level": self._categorize_sector_risk(high_pct)
                 })
             
-            return {
+            data = {
                 "sectors": sectors,
                 "summary": {
                     "total_sectors": len(sectors),
@@ -271,6 +282,18 @@ class AnalyticsService:
                     )
                 }
             }
+            # Attach FMP sector performance as external context
+            if insights:
+                try:
+                    fmp_perf = fmp_client.get_sector_performance()
+                    data["external"] = {"fmp_sector_performance": fmp_perf}
+                except Exception:
+                    pass
+                # Gemini narrative
+                _ins = self._gen_insights_sector(data)
+                if _ins:
+                    data["insights"] = _ins
+            return data
         
         except Exception as e:
             print(f"Error getting sector analysis: {e}")
@@ -278,7 +301,7 @@ class AnalyticsService:
         finally:
             db.close()
     
-    async def get_regional_analysis(self) -> Dict[str, Any]:
+    async def get_regional_analysis(self, insights: bool = False) -> Dict[str, Any]:
         """Get region-wise fraud pattern analysis"""
         db = SessionLocal()
         try:
@@ -303,7 +326,7 @@ class AnalyticsService:
                     "population_category": self._categorize_region_population(region)
                 })
             
-            return {
+            data = {
                 "regions": regions,
                 "summary": {
                     "total_regions": len(regions),
@@ -311,6 +334,11 @@ class AnalyticsService:
                     "total_cases_all_regions": sum(r['total_cases'] for r in regions)
                 }
             }
+            if insights:
+                _ins = self._gen_insights_region(data)
+                if _ins:
+                    data["insights"] = _ins
+            return data
         
         except Exception as e:
             print(f"Error getting regional analysis: {e}")
@@ -347,6 +375,42 @@ class AnalyticsService:
         """Categorize region by population"""
         metro_cities = ["Mumbai", "Delhi", "Bangalore", "Chennai", "Kolkata", "Hyderabad"]
         return "metro" if region in metro_cities else "tier2"
+
+    # Gemini prompt builders
+    def _gen_insights_summary(self, total_tips: int, total_docs: int, high_risk_pct: float, avg_auth_score: float) -> Optional[str]:
+        prompt = (
+            "Provide a concise 3-4 bullet narrative on fraud risk posture given: "
+            f"total_tips={total_tips}, total_docs={total_docs}, high_risk_pct={high_risk_pct}, "
+            f"avg_doc_auth_score={avg_auth_score}. Avoid fluff; give actionable insights."
+        )
+        return gemini_client.generate_insights(prompt)
+
+    def _gen_insights_trends(self, data: Dict[str, Any]) -> Optional[str]:
+        dirn = data.get("summary", {}).get("trend_direction")
+        points = len(data.get("summary", {}).get("total_data_points", []) if isinstance(data.get("summary", {}).get("total_data_points"), list) else [])
+        prompt = (
+            "Analyze fraud trend direction and volatility. Summarize drivers in 3 bullets. "
+            f"Direction={dirn}; points={data.get('summary', {}).get('total_data_points')}"
+        )
+        return gemini_client.generate_insights(prompt)
+
+    def _gen_insights_sector(self, data: Dict[str, Any]) -> Optional[str]:
+        top = data.get("summary", {}).get("highest_risk_sector")
+        avg = data.get("summary", {}).get("avg_high_risk_percentage")
+        prompt = (
+            "Given sector high-risk distribution, identify top-risk sectors and reasons. "
+            f"Top={top}, avg_high_risk%={avg}. Provide 3 action bullets."
+        )
+        return gemini_client.generate_insights(prompt)
+
+    def _gen_insights_region(self, data: Dict[str, Any]) -> Optional[str]:
+        top = data.get("summary", {}).get("highest_activity_region")
+        total = data.get("summary", {}).get("total_cases_all_regions")
+        prompt = (
+            "Identify hotspots and regional risk skew. Recommend targeted actions in 3 bullets. "
+            f"Top={top}, total_cases={total}."
+        )
+        return gemini_client.generate_insights(prompt)
 
 # Global service instance
 analytics_service = AnalyticsService()

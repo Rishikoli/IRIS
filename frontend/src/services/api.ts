@@ -1,8 +1,9 @@
 import axios from 'axios'
 
 // Create axios instance with base configuration
+// Use relative baseURL to leverage Vite dev proxy (see vite.config.ts server.proxy)
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: `/api`,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -198,6 +199,43 @@ export interface AdvisorVerificationResponse {
   advisors: AdvisorInfo[]
   message?: string
   cache_info?: any
+}
+
+// Global Search API types and functions
+export interface SearchRequest {
+  query: string
+  entities?: Array<'tips' | 'assessments' | 'documents'>
+  filters?: {
+    risk_levels?: Array<'High' | 'Medium' | 'Low'>
+    date_from?: string
+    date_to?: string
+  }
+  fuzzy?: { enabled: boolean; max_edits?: number }
+  ranking?: { boost?: { risk_score?: number; recentness?: number } }
+  page?: number
+  page_size?: number
+}
+
+export interface SearchHit {
+  id: string | number
+  entity_type: 'tip' | 'assessment' | 'document'
+  title?: string
+  snippet?: string
+  risk_level?: 'Low' | 'Medium' | 'High'
+  risk_score?: number
+  created_at?: string
+  extra?: Record<string, any>
+}
+
+export interface SearchResponse {
+  total: number
+  took_ms: number
+  hits: SearchHit[]
+  used_backend: 'elasticsearch' | 'sqlite_fallback' | string
+}
+
+export const searchApi = {
+  search: (payload: SearchRequest) => api.post<SearchResponse>('/search', payload),
 }
 
 // API functions
@@ -631,6 +669,43 @@ export interface AutoLinkResponse {
   links_added: number
 }
 
+export interface ResetDemoResponse {
+  message: string
+  deleted: { chains: number; nodes: number; edges: number }
+  chain_id: string
+  nodes: number
+  edges: number
+}
+
+// Node search API types
+export interface NodeSearchChainResult {
+  chain_id: string
+  reference_ids: string[]
+  count: number
+}
+
+export interface NodeSearchResponse {
+  total: number
+  took_ms: number
+  used_backend: string
+  results: NodeSearchChainResult[]
+}
+
+export interface UpsertEntityRequest {
+  entity_type: 'tip' | 'assessment' | 'document'
+  reference_id: string
+  label?: string
+  chain_id?: string
+  create_new_chain?: boolean
+}
+
+export interface UpsertEntityResponse {
+  chain_id?: string
+  node_id?: string
+  created?: boolean
+  error?: string
+}
+
 export const fraudChainApi = {
   // Get list of fraud chains
   getChains: (params?: {
@@ -653,6 +728,92 @@ export const fraudChainApi = {
   // Auto-link related fraud cases
   autoLink: () =>
     api.post<AutoLinkResponse>('/fraud-chains/auto-link'),
+
+  // Reset and recreate a minimal demo graph
+  resetDemoGraph: () =>
+    api.post<ResetDemoResponse>('/admin/demo/reset-graph'),
+
+  // Deterministically upsert a specific entity into a chain
+  upsertEntity: (payload: UpsertEntityRequest) =>
+    api.post<UpsertEntityResponse>('/fraud-chains/upsert-entity', payload),
+
+  // Node-level search returning reference IDs per chain
+  nodeSearch: (params: { query: string; chain_id?: string; limit_per_chain?: number }) =>
+    api.get<NodeSearchResponse>('/fraud-chains/node-search', { params }),
+}
+
+// Relations API types and functions
+export interface RelationsResponse {
+  nodes: FraudChainNode[]
+  edges: FraudChainEdge[]
+}
+
+export const relationsApi = {
+  // Get relations subgraph for an entity reference
+  getRelations: (
+    entityType: string,
+    referenceId: string | number,
+    params?: { depth?: number; limit?: number }
+  ) => api.get<RelationsResponse>(`/relations/${entityType}/${referenceId}`, { params }),
+}
+
+// Cases API types and functions
+export interface InvestigationCase {
+  id: string
+  title: string
+  description?: string
+  status: 'open' | 'in_progress' | 'closed'
+  priority: 'low' | 'medium' | 'high'
+  assigned_to?: string
+  related_entity_type?: 'fraud_chain' | 'assessment' | 'pdf_check'
+  related_entity_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateCaseRequest {
+  title: string
+  description?: string
+  status?: 'open' | 'in_progress' | 'closed'
+  priority?: 'low' | 'medium' | 'high'
+  assigned_to?: string
+  related_entity_type?: 'fraud_chain' | 'assessment' | 'pdf_check'
+  related_entity_id?: string
+}
+
+export interface UpdateCaseRequest {
+  title?: string
+  description?: string
+  status?: 'open' | 'in_progress' | 'closed'
+  priority?: 'low' | 'medium' | 'high'
+  assigned_to?: string
+}
+
+export interface CaseNoteItem {
+  id: string
+  case_id: string
+  author?: string
+  content: string
+  created_at: string
+}
+
+export const casesApi = {
+  list: (params?: { skip?: number; limit?: number; status?: 'open' | 'in_progress' | 'closed'; related_entity_type?: 'fraud_chain' | 'assessment' | 'pdf_check'; related_entity_id?: string }) =>
+    api.get<InvestigationCase[]>('/cases', { params }),
+  create: (payload: CreateCaseRequest) =>
+    api.post<InvestigationCase>('/cases', payload),
+  get: (caseId: string) =>
+    api.get<InvestigationCase>(`/cases/${caseId}`),
+  update: (caseId: string, payload: UpdateCaseRequest) =>
+    api.patch<InvestigationCase>(`/cases/${caseId}`, payload),
+  listNotes: (caseId: string) =>
+    api.get<CaseNoteItem[]>(`/cases/${caseId}/notes`),
+  addNote: (caseId: string, payload: { author?: string; content: string }) =>
+    api.post<CaseNoteItem>(`/cases/${caseId}/notes`, payload),
+  updateNote: (caseId: string, noteId: string, payload: { author?: string; content?: string }) =>
+    api.patch<CaseNoteItem>(`/cases/${caseId}/notes/${noteId}`, payload),
+  deleteNote: (caseId: string, noteId: string) =>
+    api.delete<{ ok: boolean }>(`/cases/${caseId}/notes/${noteId}`),
 }
 
 // Review API types and functions

@@ -19,6 +19,7 @@ except ImportError:
 from pydantic import BaseModel
 from app.services.gemini_service import GeminiService
 from app.services.enhanced_document_validation import enhanced_document_validator, DocumentValidationResult
+from app.services.fmp_service import fmp_service
 
 class PDFAnomalyResult(BaseModel):
     type: str  # 'metadata', 'font', 'signature', 'content', 'structure'
@@ -85,9 +86,34 @@ class PDFAnalysisService:
             anomalies = await self._detect_anomalies(file_path, result.ocr_text or "")
             result.anomalies = anomalies
             
-            # Analyze with Gemini if text is available
+            # Analyze with Gemini (always attempt, even if OCR is empty)
             if result.ocr_text and len(result.ocr_text.strip()) > 10:
                 result.gemini_analysis = await self._analyze_with_gemini(result.ocr_text, filename)
+            else:
+                # Compose a surrogate context including anomalies and a hint about missing OCR
+                anomalies_summary = "\n".join([
+                    f"- {a.type} ({a.severity}): {a.description}" for a in anomalies
+                ])
+                fallback_context = (
+                    "No readable OCR text was extracted from this document. Analyze based on metadata, "
+                    "structure, and any available clues.\n\nDetected anomalies summary:\n" + anomalies_summary
+                )
+                result.gemini_analysis = await self._analyze_with_gemini(fallback_context, filename)
+                if isinstance(result.gemini_analysis, dict):
+                    result.gemini_analysis.setdefault("note", "OCR text was not available; analysis is based on anomalies/metadata.")
+
+            # Balance sheet specific validation with FMP cross-checks
+            try:
+                text_for_bs = result.ocr_text or ""
+                if text_for_bs and await self._looks_like_balance_sheet(text_for_bs, filename):
+                    bs_check = await self._validate_balance_sheet_with_fmp(text_for_bs)
+                    # Attach to gemini_analysis payload for frontend display
+                    if isinstance(result.gemini_analysis, dict):
+                        result.gemini_analysis.setdefault("balance_sheet_check", bs_check)
+            except Exception as e:
+                # Non-fatal; record error inside gemini_analysis for transparency
+                if isinstance(result.gemini_analysis, dict):
+                    result.gemini_analysis.setdefault("balance_sheet_check", {"error": str(e)})
             
             # Perform enhanced multi-source validation
             if result.ocr_text and len(result.ocr_text.strip()) > 50:
@@ -149,7 +175,7 @@ class PDFAnalysisService:
         
         try:
             # Convert PDF to images
-            images = convert_from_path(file_path, dpi=200, first_page=1, last_page=5)  # Limit to first 5 pages
+            images = convert_from_path(file_path, dpi=250, first_page=1, last_page=10)  # Try up to first 10 pages
             
             extracted_text = []
             for i, image in enumerate(images):
@@ -162,11 +188,31 @@ class PDFAnalysisService:
                     text = pytesseract.image_to_string(image, lang='eng')
                     if text.strip():
                         extracted_text.append(f"--- Page {i+1} ---\n{text}")
+                    else:
+                        # Grayscale retry for low-contrast scans
+                        try:
+                            img_gray = image.convert('L')
+                            text2 = pytesseract.image_to_string(img_gray, lang='eng')
+                            if text2.strip():
+                                extracted_text.append(f"--- Page {i+1} (gray) ---\n{text2}")
+                        except Exception:
+                            pass
                 finally:
                     # Clean up temporary image
                     if temp_image_path.exists():
                         temp_image_path.unlink()
             
+            # If still empty, try a second pass with higher DPI but fewer pages (safety net)
+            if not extracted_text:
+                try:
+                    images2 = convert_from_path(file_path, dpi=300, first_page=1, last_page=5)
+                    for j, image2 in enumerate(images2):
+                        text3 = pytesseract.image_to_string(image2, lang='eng')
+                        if text3.strip():
+                            extracted_text.append(f"--- Page {j+1} (300dpi) ---\n{text3}")
+                except Exception:
+                    pass
+
             return "\n\n".join(extracted_text)
             
         except Exception as e:
