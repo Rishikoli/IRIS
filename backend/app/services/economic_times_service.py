@@ -13,6 +13,7 @@ import re
 import os
 import random
 from app.services.gemini_service import GeminiService
+from app.services.cache_service import cache_service, rate_limit_service, data_freshness_service
 
 class NewsArticle(BaseModel):
     title: str
@@ -48,6 +49,18 @@ class EconomicTimesScrapingService:
         self.gemini_service = GeminiService()
         self.use_real_scraping = os.getenv("USE_REAL_SCRAPING", "false").lower() == "true"
         
+        # Rate limiting and retry configuration
+        self.scraping_delay = float(os.getenv("SCRAPING_DELAY_SECONDS", "1"))
+        self.max_retries = 3
+        self.retry_delay = 2.0
+        
+        # Cache TTL settings (in seconds)
+        self.cache_ttl = {
+            "news_articles": 1800,    # 30 minutes
+            "regulatory_updates": 3600, # 1 hour
+            "market_sentiment": 900    # 15 minutes
+        }
+        
         # Categories to monitor
         self.categories = {
             "markets": "/markets",
@@ -75,87 +88,171 @@ class EconomicTimesScrapingService:
         }
     
     async def scrape_latest_news(self, categories: Optional[List[str]] = None) -> List[NewsArticle]:
-        """Scrape latest financial news from Economic Times"""
+        """Scrape latest financial news from Economic Times with caching and rate limiting"""
         if not categories:
             categories = ["markets", "policy"]
         
+        # Generate cache key
+        cache_key = cache_service.generate_cache_key("economic_times", "news", {"categories": categories})
+        
+        # Try to get from cache first
+        cached_data = await cache_service.get(cache_key)
+        if cached_data and await data_freshness_service.is_data_fresh("news_data", cache_key):
+            return [NewsArticle(**item) for item in cached_data]
+        
         try:
+            # Check rate limit
+            if not await rate_limit_service.check_rate_limit("scraping"):
+                print("Economic Times scraping rate limit exceeded, using cached data")
+                if cached_data:
+                    return [NewsArticle(**item) for item in cached_data]
+                else:
+                    return await self._generate_mock_news()
+            
+            # Fetch real data if scraping is enabled
             if self.use_real_scraping:
-                return await self._scrape_real_news(categories)
+                data = await self._scrape_real_news_with_retry(categories)
             else:
-                return await self._generate_mock_news()
+                data = await self._generate_mock_news()
+            
+            # Cache the results
+            serializable_data = [item.model_dump() for item in data]
+            await cache_service.set(cache_key, serializable_data, self.cache_ttl["news_articles"], "economic_times")
+            await data_freshness_service.mark_data_fresh("news_data", cache_key, "economic_times")
+            
+            return data
             
         except Exception as e:
             print(f"Error scraping news: {e}")
+            # Fallback to cached data or mock data
+            if cached_data:
+                return [NewsArticle(**item) for item in cached_data]
             return await self._generate_mock_news()
+    
+    async def _scrape_real_news_with_retry(self, categories: List[str]) -> List[NewsArticle]:
+        """Scrape real news with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                return await self._scrape_real_news(categories)
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise e
+                print(f"Scraping attempt {attempt + 1} failed, retrying: {e}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        
+        return []
     
     async def _scrape_real_news(self, categories: List[str]) -> List[NewsArticle]:
         """Scrape real news from Economic Times website"""
         articles = []
         
-        async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=self.headers, timeout=30.0, follow_redirects=True) as client:
             for category in categories:
                 try:
                     category_url = self.base_url + self.categories.get(category, "/markets")
                     
                     response = await client.get(category_url)
                     if response.status_code != 200:
+                        print(f"Failed to fetch {category_url}: {response.status_code}")
                         continue
                     
                     soup = BeautifulSoup(response.content, 'html.parser')
                     
-                    # Find article links (Economic Times specific selectors)
-                    article_links = soup.find_all('a', href=True)
+                    # Enhanced selectors for Economic Times
+                    article_selectors = [
+                        'a[href*="/news/"]',
+                        'a[href*="/markets/"]',
+                        'a[href*="/industry/"]',
+                        '.eachStory a',
+                        '.story-box a',
+                        'h3 a',
+                        'h2 a'
+                    ]
                     
-                    for link in article_links[:10]:  # Limit to 10 articles per category
+                    found_links = []
+                    for selector in article_selectors:
+                        links = soup.select(selector)
+                        found_links.extend(links)
+                    
+                    # Remove duplicates
+                    unique_links = {}
+                    for link in found_links:
                         href = link.get('href')
-                        if not href or not href.startswith('/'):
+                        if href and href not in unique_links:
+                            unique_links[href] = link
+                    
+                    processed_count = 0
+                    for href, link in unique_links.items():
+                        if processed_count >= 15:  # Limit per category
+                            break
+                        
+                        # Normalize URL
+                        if href.startswith('/'):
+                            article_url = self.base_url + href
+                        elif href.startswith('http'):
+                            article_url = href
+                        else:
                             continue
                         
-                        article_url = self.base_url + href
-                        title_element = link.find('h3') or link.find('h2') or link
-                        title = title_element.get_text(strip=True) if title_element else ""
+                        # Extract title
+                        title = link.get_text(strip=True)
+                        if not title:
+                            title_elem = link.find(['h1', 'h2', 'h3', 'h4'])
+                            title = title_elem.get_text(strip=True) if title_elem else ""
                         
                         # Filter for relevant articles
-                        if not title or len(title) < 20:
+                        if not title or len(title) < 15:
                             continue
                         
-                        # Check if article is fraud/regulatory related
+                        # Enhanced relevance checking
                         title_lower = title.lower()
-                        is_relevant = (
-                            any(keyword in title_lower for keyword in self.fraud_keywords) or
-                            any(regulator.lower() in title_lower for regulator in self.regulators)
-                        )
+                        is_fraud_related = any(keyword in title_lower for keyword in self.fraud_keywords)
+                        is_regulatory_related = any(regulator.lower() in title_lower for regulator in self.regulators)
+                        is_market_related = any(keyword in title_lower for keyword in [
+                            'stock', 'market', 'trading', 'investment', 'investor', 'share', 'equity'
+                        ])
                         
-                        if is_relevant:
-                            # Scrape full article content
-                            article_content = await self._scrape_article_content(client, article_url)
-                            
-                            if article_content:
-                                # Extract regulatory mentions and stock mentions
-                                regulatory_mentions = [reg for reg in self.regulators if reg.lower() in article_content.lower()]
-                                stock_mentions = self._extract_stock_mentions(article_content)
+                        if is_fraud_related or is_regulatory_related or (is_market_related and category == "markets"):
+                            try:
+                                # Add delay to be respectful
+                                await asyncio.sleep(self.scraping_delay)
                                 
-                                # Calculate fraud relevance score
-                                fraud_score = self._calculate_fraud_relevance(title, article_content)
+                                # Scrape full article content
+                                article_content = await self._scrape_article_content_enhanced(client, article_url)
                                 
-                                article = NewsArticle(
-                                    title=title,
-                                    content=article_content[:1000] + "..." if len(article_content) > 1000 else article_content,
-                                    url=article_url,
-                                    category=category,
-                                    published_at=datetime.now() - timedelta(hours=random.randint(1, 24)),
-                                    fraud_relevance_score=fraud_score,
-                                    regulatory_mentions=regulatory_mentions,
-                                    stock_mentions=stock_mentions,
-                                    sentiment=self._analyze_sentiment(title + " " + article_content)
-                                )
-                                articles.append(article)
+                                if article_content and len(article_content) > 50:
+                                    # Extract regulatory mentions and stock mentions
+                                    regulatory_mentions = [
+                                        reg for reg in self.regulators 
+                                        if reg.lower() in (title + " " + article_content).lower()
+                                    ]
+                                    stock_mentions = self._extract_stock_mentions(title + " " + article_content)
+                                    
+                                    # Calculate fraud relevance score
+                                    fraud_score = self._calculate_fraud_relevance(title, article_content)
+                                    
+                                    # Determine sentiment
+                                    sentiment = self._analyze_sentiment(title + " " + article_content)
+                                    
+                                    article = NewsArticle(
+                                        title=title,
+                                        content=article_content[:1200] + "..." if len(article_content) > 1200 else article_content,
+                                        url=article_url,
+                                        category=category,
+                                        published_at=datetime.now() - timedelta(hours=random.randint(1, 48)),
+                                        fraud_relevance_score=fraud_score,
+                                        regulatory_mentions=regulatory_mentions,
+                                        stock_mentions=stock_mentions,
+                                        sentiment=sentiment
+                                    )
+                                    articles.append(article)
+                                    processed_count += 1
+                                
+                            except Exception as e:
+                                print(f"Error processing article {article_url}: {e}")
+                                continue
                         
-                        # Add delay to be respectful to the website
-                        await asyncio.sleep(0.5)
-                        
-                        if len(articles) >= 20:  # Limit total articles
+                        if len(articles) >= 25:  # Global limit
                             break
                     
                 except Exception as e:
@@ -163,6 +260,55 @@ class EconomicTimesScrapingService:
                     continue
         
         return articles
+    
+    async def _scrape_article_content_enhanced(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
+        """Enhanced article content scraping with better selectors"""
+        try:
+            response = await client.get(url, timeout=15.0)
+            if response.status_code != 200:
+                return None
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Enhanced content selectors for Economic Times
+            content_selectors = [
+                '.artText',
+                '.Normal',
+                '.story-content',
+                'div[data-module="ArticleContent"]',
+                '.article-content',
+                '.articleBody',
+                '.story_content',
+                '.content-wrapper p',
+                'article p',
+                '.main-content p'
+            ]
+            
+            content = ""
+            for selector in content_selectors:
+                content_elements = soup.select(selector)
+                if content_elements:
+                    content = " ".join([elem.get_text(strip=True) for elem in content_elements])
+                    if len(content) > 100:  # Ensure we got substantial content
+                        break
+            
+            # Fallback: get all paragraph text if specific selectors fail
+            if not content or len(content) < 100:
+                paragraphs = soup.find_all('p')
+                content = " ".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+            
+            # Clean up content
+            if content:
+                # Remove extra whitespace
+                content = re.sub(r'\s+', ' ', content)
+                # Remove common footer text
+                content = re.sub(r'(Subscribe to|Follow us on|Download the app).*$', '', content, flags=re.IGNORECASE)
+                
+            return content[:2500] if content else None  # Limit content length
+            
+        except Exception as e:
+            print(f"Error scraping article content from {url}: {e}")
+            return None
     
     async def _scrape_article_content(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
         """Scrape full content of an article"""

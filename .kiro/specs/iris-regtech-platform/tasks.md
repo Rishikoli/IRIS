@@ -292,7 +292,7 @@
   - Add basic CORS configuration for demo environment
   - _Requirements: 9.1, 9.6, 9.7_
 
-- [ ] 14. Sample Data Generation and Demo Preparation
+- [x] 14. Sample Data Generation and Demo Preparation
   - Create realistic sample data for tips, assessments, and PDF checks
   - Generate fraud chain examples demonstrating different fraud patterns
   - Populate heatmap data showing sector and regional fraud distribution
@@ -313,7 +313,12 @@
   - Enhance frontend PDF upload page to display multi-source validation results
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
-- [ ] 17. Real-Time Data Integration and Mock Data Replacement
+- [x] 17. Real-Time Data Integration and Mock Data Replacement
+
+
+
+
+
   - Replace FMP service mock data with actual Financial Modeling Prep API calls
   - Implement real NSE/BSE stock data fetching for Indian markets
   - Add actual company profile and financial news retrieval from FMP
@@ -328,7 +333,7 @@
   - Implement production-ready API rate limiting and quota management
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 9.1, 9.2, 9.3, 9.4_
 
-- [ ] 15. Demo Deployment Preparation
+- [x] 15. Demo Deployment Preparation
   - Create simple Docker configuration for backend and frontend
   - Add basic database indexing for demo performance
   - Create deployment scripts for easy demo setup

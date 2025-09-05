@@ -45,9 +45,13 @@ class SecurityConfig:
     # Content Security Policy
     CSP_DEVELOPMENT = (
         "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com; "
+        "script-src-elem 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
+        "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
         "connect-src 'self' https: http: ws: wss:; "
         "img-src 'self' data: https: http:; "
-        "font-src 'self' data:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net https://unpkg.com; "
         "object-src 'none'"
     )
     

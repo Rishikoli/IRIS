@@ -6,7 +6,7 @@ import time
 import os
 from collections import defaultdict
 from app.database import engine, Base
-from app.routers import tips, assessments, pdf_checks, advisors, heatmap, multi_source_data, forecast, fraud_chains, reviews, websockets
+from app.routers import tips, assessments, pdf_checks, advisors, heatmap, multi_source_data, forecast, fraud_chains, reviews, websockets, data_status, search
 from app.exceptions import (
     IRISException,
     validation_error_handler,
@@ -57,14 +57,6 @@ async def enhanced_rate_limit_middleware(request: Request, call_next):
     
     response = await call_next(request)
     return response
-
-# Add trusted host middleware
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,*.localhost").split(",")
-
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=ALLOWED_HOSTS if ENVIRONMENT != "development" else ["*"]  # Allow all only in dev
-)
 
 # Enhanced security headers middleware
 @app.middleware("http")
@@ -141,6 +133,12 @@ app.include_router(forecast.router, tags=["forecast"])
 app.include_router(fraud_chains.router, prefix="/api", tags=["fraud_chains"])
 app.include_router(reviews.router, prefix="/api", tags=["reviews"])
 app.include_router(websockets.router, tags=["websockets"])
+app.include_router(data_status.router, tags=["data_status"])
+app.include_router(search.router, prefix="/api", tags=["search"])
+
+# Import and include analytics router
+from app.routers import analytics
+app.include_router(analytics.router, tags=["analytics"])
 
 @app.get("/")
 async def root():

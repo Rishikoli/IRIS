@@ -6,6 +6,7 @@ import DashboardPage from './pages/DashboardPage'
 import FraudChainPage from './pages/FraudChainPage'
 import ReviewPage from './pages/ReviewPage'
 import WebSocketTestPage from './pages/WebSocketTestPage'
+import AnalyticsDashboard from './components/AnalyticsDashboard'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/analytics" element={<AnalyticsDashboard />} />
           <Route path="/fraud-chains" element={<FraudChainPage />} />
           {/* All functionality is now integrated into the dashboard */}
           <Route path="/check-tip" element={<DashboardPage />} />

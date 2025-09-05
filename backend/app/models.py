@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, JSON, Date
+from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, JSON, Date, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime, date
@@ -73,7 +73,7 @@ class FMPMarketData(Base):
     price = Column(Integer, nullable=True)  # Store as cents to avoid decimal issues
     change_percent = Column(Integer, nullable=True)  # Store as basis points (0.01% = 1)
     volume = Column(Integer, nullable=True)
-    market_cap = Column(Integer, nullable=True)
+    market_cap = Column(BigInteger, nullable=True)
     unusual_activity = Column(Boolean, default=False)
     fraud_relevance_score = Column(Integer, nullable=True)  # 0-100
     data_timestamp = Column(DateTime, nullable=False)

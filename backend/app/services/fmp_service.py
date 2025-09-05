@@ -9,8 +9,10 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 import os
+import json
 from app.services.gemini_service import GeminiService
 from app.services.cache_service import cache_service, rate_limit_service, data_freshness_service
+from app.services.api_key_manager import api_key_manager
 
 class StockData(BaseModel):
     symbol: str
@@ -45,70 +47,164 @@ class CompanyFinancials(BaseModel):
 
 class FMPIntegrationService:
     def __init__(self):
-        self.api_key = os.getenv("FMP_API_KEY", "demo")  # Use demo key for development
         self.base_url = "https://financialmodelingprep.com/api/v3"
         self.gemini_service = GeminiService()
+        self.use_real_api = os.getenv("USE_REAL_FMP", "false").lower() == "true"
         
-        # Indian stock symbols for demo purposes
+        # Rate limiting configuration
+        self.rate_limit_per_minute = int(os.getenv("FMP_RATE_LIMIT_PER_MINUTE", "60"))
+        self.max_retries = 3
+        self.retry_delay = 1.0
+        
+        # Indian stock symbols for NSE/BSE markets
         self.indian_stocks = [
             "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "HINDUNILVR.NS",
             "ICICIBANK.NS", "KOTAKBANK.NS", "BHARTIARTL.NS", "ITC.NS", "SBIN.NS",
-            "ASIANPAINT.NS", "MARUTI.NS", "BAJFINANCE.NS", "HCLTECH.NS", "WIPRO.NS"
+            "ASIANPAINT.NS", "MARUTI.NS", "BAJFINANCE.NS", "HCLTECH.NS", "WIPRO.NS",
+            "LT.NS", "AXISBANK.NS", "ULTRACEMCO.NS", "TITAN.NS", "NESTLEIND.NS"
         ]
+        
+        # Cache TTL settings (in seconds)
+        self.cache_ttl = {
+            "market_data": 300,      # 5 minutes
+            "company_profile": 86400, # 24 hours
+            "financial_news": 1800,   # 30 minutes
+            "company_news": 3600,     # 1 hour
+            "financials": 43200       # 12 hours
+        }
     
     async def fetch_market_data(self, symbols: Optional[List[str]] = None) -> List[StockData]:
-        """Fetch real-time stock prices and market data from FMP API"""
+        """Fetch real-time stock prices and market data from FMP API with caching and rate limiting"""
         if not symbols:
             symbols = self.indian_stocks[:10]  # Limit for demo
         
+        # Generate cache key
+        cache_key = cache_service.generate_cache_key("fmp", "market_data", {"symbols": symbols})
+        
+        # Try to get from cache first
+        cached_data = await cache_service.get(cache_key)
+        if cached_data and await data_freshness_service.is_data_fresh("market_data", cache_key):
+            return [StockData(**item) for item in cached_data]
+        
         try:
-            # Try real FMP API first, fallback to mock if API key is demo or fails
-            if self.api_key != "demo":
-                return await self._fetch_real_market_data(symbols)
+            # Check service availability
+            if not await api_key_manager.is_service_available("fmp"):
+                print("FMP service is down, using fallback")
+                if cached_data:
+                    return [StockData(**item) for item in cached_data]
+                else:
+                    return await self._fetch_mock_market_data(symbols)
+            
+            # Check rate limit
+            if not await rate_limit_service.check_rate_limit("fmp"):
+                print("FMP API rate limit exceeded, using cached data")
+                if cached_data:
+                    return [StockData(**item) for item in cached_data]
+                else:
+                    return await self._fetch_mock_market_data(symbols)
+            
+            # Get API key
+            api_key = await api_key_manager.get_api_key("fmp")
+            
+            # Fetch real data if API key is available
+            if self.use_real_api and api_key:
+                start_time = datetime.now()
+                data = await self._fetch_real_market_data_with_retry(symbols, api_key)
+                response_time = (datetime.now() - start_time).total_seconds() * 1000
+                await api_key_manager.record_api_success("fmp", "primary", response_time)
             else:
-                return await self._fetch_mock_market_data(symbols)
+                data = await self._fetch_mock_market_data(symbols)
+            
+            # Cache the results
+            serializable_data = [item.model_dump() for item in data]
+            await cache_service.set(cache_key, serializable_data, self.cache_ttl["market_data"], "fmp")
+            await data_freshness_service.mark_data_fresh("market_data", cache_key, "fmp")
+            
+            return data
             
         except Exception as e:
             print(f"Error fetching market data: {e}")
-            # Fallback to mock data on error
-            return await self._fetch_mock_market_data(symbols)
+            await api_key_manager.record_api_error("fmp", "primary", str(e))
+            
+            # Use fallback strategy
+            fallback = await api_key_manager.get_fallback_strategy("fmp")
+            
+            if fallback.get("use_cache") and cached_data:
+                return [StockData(**item) for item in cached_data]
+            elif fallback.get("mock_data"):
+                return await self._fetch_mock_market_data(symbols)
+            else:
+                return []
     
-    async def _fetch_real_market_data(self, symbols: List[str]) -> List[StockData]:
+    async def _fetch_real_market_data_with_retry(self, symbols: List[str], api_key: str) -> List[StockData]:
+        """Fetch real market data from FMP API with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                return await self._fetch_real_market_data(symbols, api_key)
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise e
+                print(f"Attempt {attempt + 1} failed, retrying in {self.retry_delay}s: {e}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        
+        return []
+    
+    async def _fetch_real_market_data(self, symbols: List[str], api_key: str) -> List[StockData]:
         """Fetch real market data from FMP API"""
         stock_data_list = []
         
-        async with httpx.AsyncClient() as client:
-            for symbol in symbols:
-                try:
-                    # Get real-time quote
-                    quote_url = f"{self.base_url}/quote/{symbol}"
-                    response = await client.get(
-                        quote_url,
-                        params={"apikey": self.api_key},
-                        timeout=10.0
-                    )
+        # Use batch API for better efficiency
+        symbols_str = ",".join(symbols[:20])  # FMP supports batch quotes
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                # Get batch quotes for better efficiency
+                quote_url = f"{self.base_url}/quote/{symbols_str}"
+                response = await client.get(
+                    quote_url,
+                    params={"apikey": api_key}
+                )
+                
+                if response.status_code == 200:
+                    quote_data = response.json()
                     
-                    if response.status_code == 200:
-                        quote_data = response.json()
-                        if quote_data and len(quote_data) > 0:
-                            quote = quote_data[0]
+                    for quote in quote_data:
+                        try:
+                            # Validate and clean data
+                            price = float(quote.get('price', 0))
+                            change_percent = float(quote.get('changesPercentage', 0))
+                            volume = int(quote.get('volume', 0))
+                            market_cap = quote.get('marketCap')
+                            
+                            # Skip invalid data
+                            if price <= 0:
+                                continue
                             
                             stock_data = StockData(
-                                symbol=symbol,
-                                price=float(quote.get('price', 0)),
-                                change_percent=float(quote.get('changesPercentage', 0)),
-                                volume=int(quote.get('volume', 0)),
-                                market_cap=int(quote.get('marketCap', 0)) if quote.get('marketCap') else None,
-                                unusual_activity=abs(float(quote.get('changesPercentage', 0))) > 5
+                                symbol=quote.get('symbol', ''),
+                                price=price,
+                                change_percent=change_percent,
+                                volume=volume,
+                                market_cap=int(market_cap) if market_cap and market_cap > 0 else None,
+                                unusual_activity=abs(change_percent) > 5 or volume > 1000000
                             )
                             stock_data_list.append(stock_data)
+                            
+                        except (ValueError, TypeError) as e:
+                            print(f"Error parsing quote data for {quote.get('symbol', 'unknown')}: {e}")
+                            continue
+                
+                elif response.status_code == 429:
+                    raise Exception("Rate limit exceeded")
+                elif response.status_code == 401:
+                    raise Exception("Invalid API key")
+                else:
+                    raise Exception(f"API error: {response.status_code}")
                     
-                    # Add small delay to respect rate limits
-                    await asyncio.sleep(0.1)
-                    
-                except Exception as e:
-                    print(f"Error fetching data for {symbol}: {e}")
-                    continue
+            except httpx.TimeoutException:
+                raise Exception("API request timeout")
+            except httpx.RequestError as e:
+                raise Exception(f"Network error: {e}")
         
         return stock_data_list
     
@@ -134,82 +230,167 @@ class FMPIntegrationService:
         return mock_data
     
     async def fetch_financial_news(self, sectors: Optional[List[str]] = None) -> List[MarketNews]:
-        """Fetch financial news from FMP API"""
+        """Fetch financial news from FMP API with caching and rate limiting"""
+        # Generate cache key
+        cache_key = cache_service.generate_cache_key("fmp", "financial_news", {"sectors": sectors or []})
+        
+        # Try to get from cache first
+        cached_data = await cache_service.get(cache_key)
+        if cached_data and await data_freshness_service.is_data_fresh("news_data", cache_key):
+            return [MarketNews(**item) for item in cached_data]
+        
         try:
-            # Try real FMP API first, fallback to mock if API key is demo or fails
-            if self.api_key != "demo":
-                return await self._fetch_real_financial_news(sectors)
+            # Check rate limit
+            if not await rate_limit_service.check_rate_limit("fmp"):
+                print("FMP API rate limit exceeded, using cached news")
+                if cached_data:
+                    return [MarketNews(**item) for item in cached_data]
+                else:
+                    return await self._fetch_mock_financial_news()
+            
+            # Fetch real data if API is configured
+            if self.use_real_api:
+                data = await self._fetch_real_financial_news_with_retry(sectors)
             else:
-                return await self._fetch_mock_financial_news()
+                data = await self._fetch_mock_financial_news()
+            
+            # Cache the results
+            serializable_data = [item.model_dump() for item in data]
+            await cache_service.set(cache_key, serializable_data, self.cache_ttl["financial_news"], "fmp")
+            await data_freshness_service.mark_data_fresh("news_data", cache_key, "fmp")
+            
+            return data
             
         except Exception as e:
             print(f"Error fetching financial news: {e}")
+            # Fallback to cached data or mock data
+            if cached_data:
+                return [MarketNews(**item) for item in cached_data]
             return await self._fetch_mock_financial_news()
+    
+    async def _fetch_real_financial_news_with_retry(self, sectors: Optional[List[str]] = None) -> List[MarketNews]:
+        """Fetch real financial news from FMP API with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                return await self._fetch_real_financial_news(sectors)
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise e
+                print(f"News fetch attempt {attempt + 1} failed, retrying: {e}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        
+        return []
     
     async def _fetch_real_financial_news(self, sectors: Optional[List[str]] = None) -> List[MarketNews]:
         """Fetch real financial news from FMP API"""
         news_list = []
         
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 # Get general market news
                 news_url = f"{self.base_url}/stock_news"
                 response = await client.get(
                     news_url,
                     params={
                         "apikey": self.api_key,
-                        "limit": 50,
+                        "limit": 100,  # Get more articles to filter
                         "page": 0
-                    },
-                    timeout=15.0
+                    }
                 )
                 
                 if response.status_code == 200:
                     news_data = response.json()
                     
                     for article in news_data:
-                        # Filter for Indian market or fraud-related news
-                        title = article.get('title', '').lower()
-                        content = article.get('text', '')
-                        
-                        # Check if relevant to Indian markets or fraud detection
-                        indian_keywords = ['india', 'sebi', 'nse', 'bse', 'mumbai', 'delhi', 'bangalore']
-                        fraud_keywords = ['fraud', 'scam', 'manipulation', 'regulatory', 'investigation']
-                        
-                        is_relevant = (
-                            any(keyword in title for keyword in indian_keywords) or
-                            any(keyword in title for keyword in fraud_keywords)
-                        )
-                        
-                        if is_relevant:
-                            # Extract symbols mentioned in the article
-                            symbols = []
-                            for stock in self.indian_stocks:
-                                stock_name = stock.replace('.NS', '')
-                                if stock_name.lower() in title or stock_name.lower() in content.lower():
-                                    symbols.append(stock)
+                        try:
+                            title = article.get('title', '')
+                            content = article.get('text', '')
                             
-                            # Determine sentiment
-                            sentiment = self._analyze_news_sentiment(title + " " + content)
+                            if not title or len(title) < 10:
+                                continue
                             
-                            news_item = MarketNews(
-                                title=article.get('title', ''),
-                                content=content[:500] + "..." if len(content) > 500 else content,
-                                url=article.get('url', ''),
-                                published_at=datetime.fromisoformat(article.get('publishedDate', '').replace('Z', '+00:00')),
-                                symbols=symbols,
-                                sentiment=sentiment
-                            )
-                            news_list.append(news_item)
+                            # Enhanced relevance filtering for Indian markets and fraud detection
+                            title_lower = title.lower()
+                            content_lower = content.lower()
                             
-                            # Limit to 20 relevant articles
-                            if len(news_list) >= 20:
-                                break
+                            # Indian market keywords
+                            indian_keywords = [
+                                'india', 'indian', 'sebi', 'nse', 'bse', 'mumbai', 'delhi', 
+                                'bangalore', 'chennai', 'kolkata', 'rupee', 'inr', 'rbi',
+                                'sensex', 'nifty', 'bombay stock exchange'
+                            ]
+                            
+                            # Fraud and regulatory keywords
+                            fraud_keywords = [
+                                'fraud', 'scam', 'manipulation', 'regulatory', 'investigation',
+                                'penalty', 'fine', 'warning', 'alert', 'unauthorized', 'illegal',
+                                'ponzi', 'chit fund', 'fake', 'suspicious', 'enforcement'
+                            ]
+                            
+                            # Check relevance
+                            indian_relevance = any(keyword in title_lower or keyword in content_lower for keyword in indian_keywords)
+                            fraud_relevance = any(keyword in title_lower or keyword in content_lower for keyword in fraud_keywords)
+                            
+                            # Include if relevant to Indian markets OR fraud detection
+                            if indian_relevance or fraud_relevance:
+                                # Extract symbols mentioned in the article
+                                symbols = self._extract_stock_symbols_from_text(title + " " + content)
+                                
+                                # Parse published date
+                                try:
+                                    published_date = datetime.fromisoformat(
+                                        article.get('publishedDate', '').replace('Z', '+00:00')
+                                    )
+                                except (ValueError, TypeError):
+                                    published_date = datetime.now()
+                                
+                                # Determine sentiment
+                                sentiment = self._analyze_news_sentiment(title + " " + content)
+                                
+                                news_item = MarketNews(
+                                    title=title,
+                                    content=content[:800] + "..." if len(content) > 800 else content,
+                                    url=article.get('url', ''),
+                                    published_at=published_date,
+                                    symbols=symbols,
+                                    sentiment=sentiment
+                                )
+                                news_list.append(news_item)
+                                
+                                # Limit to 25 relevant articles
+                                if len(news_list) >= 25:
+                                    break
+                                    
+                        except Exception as e:
+                            print(f"Error processing news article: {e}")
+                            continue
                 
-        except Exception as e:
-            print(f"Error fetching real financial news: {e}")
+                elif response.status_code == 429:
+                    raise Exception("Rate limit exceeded")
+                elif response.status_code == 401:
+                    raise Exception("Invalid API key")
+                else:
+                    raise Exception(f"API error: {response.status_code}")
+                
+        except httpx.TimeoutException:
+            raise Exception("News API request timeout")
+        except httpx.RequestError as e:
+            raise Exception(f"Network error: {e}")
         
         return news_list
+    
+    def _extract_stock_symbols_from_text(self, text: str) -> List[str]:
+        """Extract Indian stock symbols from text"""
+        symbols = []
+        text_upper = text.upper()
+        
+        # Check for known Indian stocks
+        for stock in self.indian_stocks:
+            stock_base = stock.replace('.NS', '')
+            if stock_base in text_upper or stock in text_upper:
+                symbols.append(stock)
+        
+        return list(set(symbols))  # Remove duplicates
     
     async def _fetch_mock_financial_news(self) -> List[MarketNews]:
         """Generate mock financial news for demo/fallback"""

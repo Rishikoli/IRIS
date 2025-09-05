@@ -46,8 +46,24 @@ class GoogleTrendsService:
         self.gemini_service = GeminiService()
         self.use_real_api = PYTRENDS_AVAILABLE and os.getenv("USE_REAL_TRENDS", "false").lower() == "true"
         
+        # Rate limiting and caching
+        self.rate_limit_per_hour = int(os.getenv("TRENDS_RATE_LIMIT_PER_HOUR", "100"))
+        self.max_retries = 3
+        self.retry_delay = 2.0
+        
+        # Cache TTL settings (in seconds)
+        self.cache_ttl = {
+            "trends_data": 3600,      # 1 hour
+            "regional_spikes": 1800,  # 30 minutes
+            "correlations": 7200      # 2 hours
+        }
+        
         if self.use_real_api:
-            self.pytrends = TrendReq(hl='en-US', tz=360)  # Indian timezone
+            try:
+                self.pytrends = TrendReq(hl='en-US', tz=330, timeout=(10, 25))  # Indian timezone (IST = UTC+5:30)
+            except Exception as e:
+                print(f"Error initializing pytrends: {e}")
+                self.use_real_api = False
         
         # Fraud-related keywords to monitor
         self.fraud_keywords = [
@@ -72,19 +88,62 @@ class GoogleTrendsService:
         }
     
     async def fetch_fraud_trends(self, regions: Optional[List[str]] = None, timeframe: str = "7d") -> List[TrendData]:
-        """Fetch Google Trends data for fraud-related keywords by region"""
+        """Fetch Google Trends data for fraud-related keywords by region with caching and rate limiting"""
         if not regions:
             regions = list(self.indian_regions.keys())
         
+        # Generate cache key
+        cache_key = cache_service.generate_cache_key("trends", "fraud_trends", {
+            "regions": regions, 
+            "timeframe": timeframe
+        })
+        
+        # Try to get from cache first
+        cached_data = await cache_service.get(cache_key)
+        if cached_data and await data_freshness_service.is_data_fresh("trends_data", cache_key):
+            return [TrendData(**item) for item in cached_data]
+        
         try:
+            # Check rate limit
+            if not await rate_limit_service.check_rate_limit("trends"):
+                print("Google Trends API rate limit exceeded, using cached data")
+                if cached_data:
+                    return [TrendData(**item) for item in cached_data]
+                else:
+                    return await self._fetch_mock_trends(regions, timeframe)
+            
+            # Fetch real data if API is configured
             if self.use_real_api:
-                return await self._fetch_real_trends(regions, timeframe)
+                data = await self._fetch_real_trends_with_retry(regions, timeframe)
             else:
-                return await self._fetch_mock_trends(regions, timeframe)
+                data = await self._fetch_mock_trends(regions, timeframe)
+            
+            # Cache the results
+            serializable_data = [item.model_dump() for item in data]
+            await cache_service.set(cache_key, serializable_data, self.cache_ttl["trends_data"], "trends")
+            await data_freshness_service.mark_data_fresh("trends_data", cache_key, "trends")
+            
+            return data
             
         except Exception as e:
             print(f"Error fetching Google Trends data: {e}")
+            # Fallback to cached data or mock data
+            if cached_data:
+                return [TrendData(**item) for item in cached_data]
             return await self._fetch_mock_trends(regions, timeframe)
+    
+    async def _fetch_real_trends_with_retry(self, regions: List[str], timeframe: str) -> List[TrendData]:
+        """Fetch real Google Trends data with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                return await self._fetch_real_trends(regions, timeframe)
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise e
+                print(f"Trends fetch attempt {attempt + 1} failed, retrying: {e}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        
+        return []
     
     async def _fetch_real_trends(self, regions: List[str], timeframe: str) -> List[TrendData]:
         """Fetch real Google Trends data using pytrends"""
@@ -100,68 +159,94 @@ class GoogleTrendsService:
             }
             pytrends_timeframe = timeframe_map.get(timeframe, "now 7-d")
             
-            # Process keywords in batches (pytrends limit is 5 keywords per request)
-            keyword_batches = [self.fraud_keywords[i:i+5] for i in range(0, len(self.fraud_keywords), 5)]
+            # Process keywords in smaller batches to avoid rate limits
+            keyword_batches = [self.fraud_keywords[i:i+3] for i in range(0, len(self.fraud_keywords), 3)]
             
-            for region in regions:
-                geo_code = self.indian_regions.get(region, "IN")  # Default to India
+            for region in regions[:5]:  # Limit regions to avoid rate limits
+                geo_code = self.indian_regions.get(region, "IN")
                 
-                for keyword_batch in keyword_batches:
+                for batch_idx, keyword_batch in enumerate(keyword_batches[:3]):  # Limit batches
                     try:
+                        # Add delay between requests
+                        if batch_idx > 0:
+                            await asyncio.sleep(2)
+                        
                         # Build payload for pytrends
-                        self.pytrends.build_payload(
-                            keyword_batch, 
-                            cat=0, 
-                            timeframe=pytrends_timeframe, 
-                            geo=geo_code, 
-                            gprop=''
+                        await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.pytrends.build_payload(
+                                keyword_batch, 
+                                cat=0, 
+                                timeframe=pytrends_timeframe, 
+                                geo=geo_code, 
+                                gprop=''
+                            )
                         )
                         
                         # Get interest over time
-                        interest_df = self.pytrends.interest_over_time()
+                        interest_df = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.pytrends.interest_over_time()
+                        )
+                        
+                        if not interest_df.empty and 'isPartial' in interest_df.columns:
+                            # Remove the 'isPartial' column if it exists
+                            interest_df = interest_df.drop(columns=['isPartial'])
                         
                         if not interest_df.empty:
                             # Process each keyword
                             for keyword in keyword_batch:
                                 if keyword in interest_df.columns:
-                                    # Get latest values
-                                    latest_values = interest_df[keyword].tail(7)  # Last 7 data points
-                                    current_volume = int(latest_values.iloc[-1]) if len(latest_values) > 0 else 0
+                                    # Get recent values
+                                    keyword_series = interest_df[keyword]
                                     
-                                    # Calculate trend direction
-                                    if len(latest_values) >= 2:
-                                        trend_slope = latest_values.iloc[-1] - latest_values.iloc[0]
-                                        if trend_slope > 5:
-                                            trend_direction = "rising"
-                                        elif trend_slope < -5:
-                                            trend_direction = "falling"
+                                    # Filter out zero values and get recent non-zero data
+                                    non_zero_values = keyword_series[keyword_series > 0]
+                                    
+                                    if len(non_zero_values) > 0:
+                                        current_volume = int(non_zero_values.iloc[-1])
+                                        
+                                        # Calculate trend direction using recent data
+                                        if len(non_zero_values) >= 3:
+                                            recent_values = non_zero_values.tail(3)
+                                            trend_slope = recent_values.iloc[-1] - recent_values.iloc[0]
+                                            
+                                            if trend_slope > 10:
+                                                trend_direction = "rising"
+                                            elif trend_slope < -10:
+                                                trend_direction = "falling"
+                                            else:
+                                                trend_direction = "stable"
                                         else:
                                             trend_direction = "stable"
                                     else:
+                                        # Use overall average if no recent non-zero data
+                                        current_volume = int(keyword_series.mean()) if len(keyword_series) > 0 else 0
                                         trend_direction = "stable"
                                     
                                     trend_data = TrendData(
                                         keyword=keyword,
                                         region=region,
-                                        search_volume=current_volume,
+                                        search_volume=max(0, current_volume),  # Ensure non-negative
                                         trend_direction=trend_direction,
                                         timeframe=timeframe,
                                         timestamp=datetime.now()
                                     )
                                     trends_data.append(trend_data)
                         
-                        # Add delay to respect rate limits
-                        await asyncio.sleep(1)
+                        # Add delay between keyword batches
+                        await asyncio.sleep(1.5)
                         
                     except Exception as e:
                         print(f"Error fetching trends for {keyword_batch} in {region}: {e}")
+                        # Continue with next batch instead of failing completely
                         continue
             
             return trends_data
             
         except Exception as e:
             print(f"Error in real trends fetching: {e}")
-            return []
+            raise e
     
     async def _fetch_mock_trends(self, regions: List[str], timeframe: str) -> List[TrendData]:
         """Generate mock trends data for demo/fallback"""
